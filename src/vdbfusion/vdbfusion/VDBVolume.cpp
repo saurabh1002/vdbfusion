@@ -27,6 +27,7 @@
 #include <openvdb/math/DDA.h>
 #include <openvdb/math/Ray.h>
 #include <openvdb/openvdb.h>
+#include <openvdb/tools/GridOperators.h>
 
 #include <Eigen/Core>
 #include <algorithm>
@@ -70,6 +71,11 @@ VDBVolume::VDBVolume(float voxel_size, float sdf_trunc, bool space_carving /* = 
     weights_->setName("W(x): weights grid");
     weights_->setTransform(openvdb::math::Transform::createLinearTransform(voxel_size_));
     weights_->setGridClass(openvdb::GRID_UNKNOWN);
+
+    gradients_ = openvdb::Vec3SGrid::create();
+    gradients_->setName("Grad(D(x)): gradient field of signed distance grid");
+    gradients_->setTransform(openvdb::math::Transform::createLinearTransform(voxel_size));
+    gradients_->setGridClass(openvdb::GRID_UNKNOWN);
 }
 
 void VDBVolume::UpdateTSDF(const float& sdf,
@@ -146,6 +152,56 @@ void VDBVolume::Integrate(const std::vector<Eigen::Vector3d>& points,
             }
         } while (dda.step());
     });
+}
+
+void VDBVolume::ComputeGradient() {
+    openvdb::v9_0::tools::Gradient<openvdb::FloatGrid> grad_op(*tsdf_);
+    gradients_ = grad_op.process(false);
+}
+
+Sophus::SE3d VDBVolume::ComputeTransform(const std::vector<Eigen::Vector3d>& points) {
+    const auto tsdf_acc = tsdf_->getConstUnsafeAccessor();
+    const auto grad_acc = gradients_->getConstUnsafeAccessor();
+
+    auto T = Sophus::SE3d(Sophus::SO3d().matrix(), Eigen::Matrix<double, 3, 1>(0));
+
+    auto A = Eigen::MatrixXd(6, 6);
+    A.setConstant(0);
+    auto b = Eigen::MatrixXd(6, 1);
+    b.setConstant(0);
+
+    const auto R = T.so3().matrix();
+    const auto t = T.translation();
+
+    // clang-format off
+    Eigen::Matrix<double, 3, 6> grad_pt;
+    grad_pt <<  1, 0, 0, 0, 0, 0,
+                0, 1, 0, 0, 0, 0,
+                0, 0, 1, 0, 0, 0;
+    // clang-format on
+
+    std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
+        Eigen::Vector3d point_ = -1 * R * point + t;
+        auto point_hat = Sophus::SO3d::hat(point_);
+
+        auto voxel = openvdb::math::Coord(point_.x(), point_.y(), point_.z());
+        auto sdf = tsdf_acc.getValue(voxel);
+        auto grad_sdf_vdb = grad_acc.getValue(voxel);
+
+        Eigen::Vector3d grad_sdf(grad_sdf_vdb.x(), grad_sdf_vdb.y(), grad_sdf_vdb.z());
+        grad_pt.block<3, 3>(0, 3) = point_hat;
+
+        auto grad = (grad_sdf.transpose() * grad_pt).transpose();
+
+        A += grad * grad.transpose();
+        b += sdf * grad;
+    });
+
+    auto se3 = T.log();
+    se3 = se3 - A.inverse() * b;
+    T = Sophus::SE3d::exp(se3);
+
+    return T;
 }
 
 openvdb::FloatGrid::Ptr VDBVolume::Prune(float min_weight) const {

@@ -31,6 +31,7 @@ option(USE_SYSTEM_PYBIND11 "Use system pre-installed pybind11" ON)
 option(SILENCE_WARNINGS "To build manylinux packages only, disable on the global scope" OFF)
 option(BUILD_CXX_EXAMPLE "Build C++ examples" OFF)
 option(BUILD_PYTHON_BINDINGS "Build the python module" OFF)
+option(USE_SYSTEM_SOPHUS "Use system pre-installed sophus" OFF)
 
 mark_as_advanced(USE_CCACHE USE_SYSTEM_OPENVDB SILENCE_WARNINGS BUILD_PYTHON_BINDINGS)
 

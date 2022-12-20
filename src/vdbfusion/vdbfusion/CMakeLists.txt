@@ -43,10 +43,10 @@ set_target_properties(vdbfusion PROPERTIES PUBLIC_HEADER "VDBVolume.h")
 target_include_directories(
   vdbfusion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
                                                        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(vdbfusion PUBLIC Eigen3::Eigen OpenVDB::openvdb)
+target_link_libraries(vdbfusion PUBLIC Eigen3::Eigen OpenVDB::openvdb sophus::sophus)
 
 # NOTE: Installation is still work in progress, therefore we only support dev machines with all the 3rdparty
 # dependencies locally installed
 if((USE_SYSTEM_EIGEN3 AND USE_SYSTEM_OPENVDB) OR VDBFUSION_STANDALONE)
-  include(cmake/Install.cmake)
+  # include(cmake/Install.cmake)
 endif()
