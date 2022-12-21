@@ -66,9 +66,10 @@ public:
                     const std::function<float(float)>& weighting_function);
 
     /// @brief Compute the Gradients of the Signed Distance Field at each voxel location
-    void ComputeGradient();
+    openvdb::v9_0::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr ComputeGradient();
 
-    Sophus::SE3d ComputeTransform(const std::vector<Eigen::Vector3d>& points);
+    std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> AlignScan(
+        const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf);
 
     /// @brief Prune TSDF grids, ideal utility to cleanup a D(x) volume before exporting it
     openvdb::FloatGrid::Ptr Prune(float min_weight) const;
@@ -81,7 +82,7 @@ public:
     /// OpenVDB Grids modeling the signed distance field and the weight grid
     openvdb::FloatGrid::Ptr tsdf_;
     openvdb::FloatGrid::Ptr weights_;
-    openvdb::v9_0::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr gradients_;
+    // openvdb::v9_0::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr gradients_;
 
     /// VDBVolume public properties
     float voxel_size_;

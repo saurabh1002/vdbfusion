@@ -100,14 +100,23 @@ int main(int argc, char* argv[]) {
     vdbfusion::VDBVolume tsdf_volume(vdbfusion_cfg.voxel_size_, vdbfusion_cfg.sdf_trunc_,
                                      vdbfusion_cfg.space_carving_);
     timers::FPSTimer<10> timer;
+    bool init_scan = true;
+    Sophus::SE3d init_tf{};
     for (const auto& [scan, origin] : iterable(dataset)) {
         timer.tic();
-        tsdf_volume.Integrate(scan, origin, [](float /*unused*/) { return 1.0; });
+        if (!init_scan) {
+            auto [aligned_scan, T] = tsdf_volume.AlignScan(scan, init_tf);
+            tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float /*unused*/) { return 1.0; });
+            // init_tf = T;
+        } else {
+            tsdf_volume.Integrate(scan, origin, [](float /*unused*/) { return 1.0; });
+            init_scan = false;
+        }
         timer.toc();
     }
 
     // Store the grid results to disks
-    std::string map_name = fmt::format("{out_dir}/kitti_{seq}_{n_scans}_scans",
+    std::string map_name = fmt::format("{out_dir}/kitti_odom_{seq}_{n_scans}_scans",
                                        "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
                                        "seq"_a = sequence, "n_scans"_a = n_scans);
     {
@@ -115,6 +124,16 @@ int main(int argc, char* argv[]) {
         auto tsdf_grid = tsdf_volume.tsdf_;
         std::string filename = fmt::format("{map_name}.vdb", "map_name"_a = map_name);
         openvdb::io::File(filename).write({tsdf_grid});
+    }
+
+    std::string grad_name = fmt::format("{out_dir}/kitti_odom_{seq}_{n_scans}_grad",
+                                        "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
+                                        "seq"_a = sequence, "n_scans"_a = n_scans);
+    {
+        timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
+        auto grad_grid = tsdf_volume.ComputeGradient();
+        std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
+        openvdb::io::File(filename).write({grad_grid});
     }
 
     // Run marching cubes and save a .ply file
