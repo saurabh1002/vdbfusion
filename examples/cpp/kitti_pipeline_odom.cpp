@@ -102,21 +102,31 @@ int main(int argc, char* argv[]) {
     timers::FPSTimer<10> timer;
     bool init_scan = true;
     Sophus::SE3d init_tf{};
+
+    std::vector<Eigen::Matrix<double, 3, 4>> poses;
+    poses.reserve(dataset.size());
+
     for (const auto& [scan, origin] : iterable(dataset)) {
         timer.tic();
         if (!init_scan) {
             auto [aligned_scan, T] = tsdf_volume.AlignScan(scan, init_tf);
             tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float /*unused*/) { return 1.0; });
+            poses.emplace_back(T.matrix3x4());
             // init_tf = T;
         } else {
             tsdf_volume.Integrate(scan, origin, [](float /*unused*/) { return 1.0; });
+            poses.emplace_back(init_tf.matrix3x4());
             init_scan = false;
         }
         timer.toc();
     }
 
+    std::filesystem::create_directory(fmt::format(
+        "{out_dir}/kitti_odom_{seq}/", "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
+        "seq"_a = sequence));
+
     // Store the grid results to disks
-    std::string map_name = fmt::format("{out_dir}/kitti_odom_{seq}_{n_scans}_scans",
+    std::string map_name = fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans",
                                        "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
                                        "seq"_a = sequence, "n_scans"_a = n_scans);
     {
@@ -126,7 +136,7 @@ int main(int argc, char* argv[]) {
         openvdb::io::File(filename).write({tsdf_grid});
     }
 
-    std::string grad_name = fmt::format("{out_dir}/kitti_odom_{seq}_{n_scans}_grad",
+    std::string grad_name = fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans_grad",
                                         "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
                                         "seq"_a = sequence, "n_scans"_a = n_scans);
     {
@@ -134,6 +144,23 @@ int main(int argc, char* argv[]) {
         auto grad_grid = tsdf_volume.ComputeGradient();
         std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
         openvdb::io::File(filename).write({grad_grid});
+    }
+
+    std::string pose_name = fmt::format("{out_dir}/kitti_odom_{seq}/{seq}",
+                                        "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
+                                        "seq"_a = sequence);
+    {
+        timers::ScopeTimer timer("Writing Poses to disk");
+        std::string filename = fmt::format("{pose_name}.txt", "pose_name"_a = pose_name);
+        std::ofstream pose_file(filename);
+        std::for_each(poses.cbegin(), poses.cend(),
+                      [&pose_file](const Eigen::Matrix<double, 3, 4>& pose) {
+                          pose_file << pose(0, 0) << " " << pose(0, 1) << " " << pose(0, 2) << " "
+                                    << pose(0, 3) << " " << pose(1, 0) << " " << pose(1, 1) << " "
+                                    << pose(1, 2) << " " << pose(1, 3) << " " << pose(2, 0) << " "
+                                    << pose(2, 1) << " " << pose(2, 2) << " " << pose(2, 3) << "\n";
+                      });
+        pose_file.close();
     }
 
     // Run marching cubes and save a .ply file

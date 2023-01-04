@@ -72,11 +72,6 @@ VDBVolume::VDBVolume(float voxel_size, float sdf_trunc, bool space_carving /* = 
     weights_->setName("W(x): weights grid");
     weights_->setTransform(openvdb::math::Transform::createLinearTransform(voxel_size_));
     weights_->setGridClass(openvdb::GRID_UNKNOWN);
-
-    // gradients_ = openvdb::Vec3SGrid::create();
-    // gradients_->setName("Grad(D(x)): gradient field of signed distance grid");
-    // gradients_->setTransform(openvdb::math::Transform::createLinearTransform(voxel_size));
-    // gradients_->setGridClass(openvdb::GRID_UNKNOWN);
 }
 
 void VDBVolume::UpdateTSDF(const float& sdf,
@@ -177,52 +172,54 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> VDBVolume::AlignScan(
     grad_pt << 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0;
     // clang-format on
 
-    double prev_error = std::numeric_limits<double>::max();
-    double diff_error = 0;
+    Eigen::Matrix<double, 6, 1> grad;
+    grad << 0, 0, 0, 0, 0, 0;
+
     int n_iters = 0;
+    int max_iters = 50;
+    double error_threshold = 1e-1;
 
     while (true) {
         A.setConstant(0);
         b.setConstant(0);
 
+        auto se3_old = T.log();
+
         std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
             Eigen::Vector3d point_ = T * point;
+
             auto index_pos = gradients_->transform().worldToIndex(
                 openvdb::math::Vec3d(point_.x(), point_.y(), point_.z()));
             auto voxel = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
 
             auto sdf = tsdf_acc.getValue(voxel);
-            auto grad_sdf_vdb = grad_acc.getValue(voxel);
 
+            auto grad_sdf_vdb = grad_acc.getValue(voxel);
             Eigen::Vector3d grad_sdf(grad_sdf_vdb.x(), grad_sdf_vdb.y(), grad_sdf_vdb.z());
+
             grad_pt.block<3, 3>(0, 3) = Sophus::SO3d::hat(point_);
-            auto grad = (grad_sdf.transpose() * grad_pt).transpose();
+            grad = (grad_sdf.transpose() * grad_pt).transpose();
+
             A += grad * grad.transpose();
             b += sdf * grad;
         });
 
-        auto se3 = T.log();
-        se3 = se3 - A.inverse() * b;
-        T = Sophus::SE3d::exp(se3);
+        auto se3_new = se3_old - A.inverse() * b;
+        T = Sophus::SE3d::exp(se3_new);
 
-        double new_error = 0;
-
-        std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
-            auto point_ = T * point;
-            auto voxel = openvdb::math::Coord(point_.x(), point_.y(), point_.z());
-            new_error += std::abs(tsdf_acc.getValue(voxel));
-        });
+        // std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
+        //     auto point_ = T.inverse() * point;
+        //     auto index_pos = gradients_->transform().worldToIndex(
+        //         openvdb::math::Vec3d(point_.x(), point_.y(), point_.z()));
+        //     auto voxel = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
+        //     new_error += std::pow(tsdf_acc.getValue(voxel), 2);
+        // });
 
         n_iters++;
 
-        diff_error = std::abs(prev_error - new_error);
-        if (prev_error > new_error) {
-            prev_error = new_error;
-        }
-
-        if (n_iters > 50 || diff_error < 1e-4) {
+        if (n_iters > max_iters ||
+            (se3_new - se3_old).lpNorm<Eigen::Infinity>() < error_threshold) {
             std::cout << "Scan Aligning converged; n_iters = " << n_iters << "\n";
-            std::cout << T.matrix() << "\n\n";
             break;
         }
     }
