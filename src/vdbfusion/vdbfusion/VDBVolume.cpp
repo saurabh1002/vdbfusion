@@ -197,7 +197,7 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> VDBVolume::AlignScan(
             auto grad_sdf_vdb = grad_acc.getValue(voxel);
             Eigen::Vector3d grad_sdf(grad_sdf_vdb.x(), grad_sdf_vdb.y(), grad_sdf_vdb.z());
 
-            grad_pt.block<3, 3>(0, 3) = Sophus::SO3d::hat(point_);
+            grad_pt.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_);
             grad = (grad_sdf.transpose() * grad_pt).transpose();
 
             A += grad * grad.transpose();
@@ -206,14 +206,6 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> VDBVolume::AlignScan(
 
         auto se3_new = se3_old - A.inverse() * b;
         T = Sophus::SE3d::exp(se3_new);
-
-        // std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
-        //     auto point_ = T.inverse() * point;
-        //     auto index_pos = gradients_->transform().worldToIndex(
-        //         openvdb::math::Vec3d(point_.x(), point_.y(), point_.z()));
-        //     auto voxel = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
-        //     new_error += std::pow(tsdf_acc.getValue(voxel), 2);
-        // });
 
         n_iters++;
 
