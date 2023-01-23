@@ -37,7 +37,7 @@ namespace vdbfusion {
 
 class VDBVolume {
 public:
-    VDBVolume(float voxel_size, float sdf_trunc, bool space_carving = false);
+    VDBVolume(float voxel_size, float sdf_trunc, float clipping_range, bool space_carving = false);
     ~VDBVolume() = default;
 
 public:
@@ -66,7 +66,10 @@ public:
                     const std::function<float(float)>& weighting_function);
 
     /// @brief Compute the Gradients of the Signed Distance Field at each voxel location
-    openvdb::v9_0::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr ComputeGradient();
+    openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr ComputeGradient(
+        openvdb::FloatGrid::Ptr grid) const;
+
+    openvdb::FloatGrid::Ptr ClipVolume(const Sophus::SE3d& T) const;
 
     std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> AlignScan(
         const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf);
@@ -87,6 +90,7 @@ public:
     /// VDBVolume public properties
     float voxel_size_;
     float sdf_trunc_;
+    float clipping_range_;
     bool space_carving_;
 };
 

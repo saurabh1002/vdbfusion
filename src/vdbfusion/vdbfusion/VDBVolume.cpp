@@ -24,9 +24,11 @@
 
 // OpenVDB
 #include <openvdb/Types.h>
+#include <openvdb/math/BBox.h>
 #include <openvdb/math/DDA.h>
 #include <openvdb/math/Ray.h>
 #include <openvdb/openvdb.h>
+#include <openvdb/tools/Clip.h>
 #include <openvdb/tools/GridOperators.h>
 
 #include <Eigen/Core>
@@ -61,8 +63,14 @@ Eigen::Vector3d GetVoxelCenter(const openvdb::Coord& voxel, const openvdb::math:
 
 namespace vdbfusion {
 
-VDBVolume::VDBVolume(float voxel_size, float sdf_trunc, bool space_carving /* = false*/)
-    : voxel_size_(voxel_size), sdf_trunc_(sdf_trunc), space_carving_(space_carving) {
+VDBVolume::VDBVolume(float voxel_size,
+                     float sdf_trunc,
+                     float clipping_range,
+                     bool space_carving /* = false*/)
+    : voxel_size_(voxel_size),
+      sdf_trunc_(sdf_trunc),
+      clipping_range_(clipping_range),
+      space_carving_(space_carving) {
     tsdf_ = openvdb::FloatGrid::create(sdf_trunc_);
     tsdf_->setName("D(x): signed distance grid");
     tsdf_->setTransform(openvdb::math::Transform::createLinearTransform(voxel_size_));
@@ -150,20 +158,29 @@ void VDBVolume::Integrate(const std::vector<Eigen::Vector3d>& points,
     });
 }
 
-openvdb::v9_0::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr
-VDBVolume::ComputeGradient() {
-    openvdb::v9_0::tools::Gradient<openvdb::FloatGrid> grad_op(*tsdf_);
+openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr VDBVolume::ComputeGradient(
+    openvdb::FloatGrid::Ptr grid) const {
+    openvdb::tools::Gradient<openvdb::FloatGrid> grad_op(*grid);
     return grad_op.process(false);
+}
+
+openvdb::FloatGrid::Ptr VDBVolume::ClipVolume(const Sophus::SE3d& T) const {
+    auto tr = T.translation();
+    auto center = openvdb::math::Vec3d(tr.x(), tr.y(), tr.z());
+    openvdb::BBoxd bbox(center - clipping_range_, center + clipping_range_);
+    return openvdb::tools::clip(*tsdf_, bbox);
 }
 
 std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> VDBVolume::AlignScan(
     const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf) {
-    const auto gradients_ = this->ComputeGradient();
+    const auto clipped_grid = this->ClipVolume(init_tf);
+    const auto gradients_ = this->ComputeGradient(clipped_grid);
 
-    const auto tsdf_acc = tsdf_->getConstUnsafeAccessor();
+    const auto tsdf_acc = clipped_grid->getConstUnsafeAccessor();
     const auto grad_acc = gradients_->getConstUnsafeAccessor();
 
     auto T = init_tf;
+
     auto A = Eigen::MatrixXd(6, 6);
     auto b = Eigen::MatrixXd(6, 1);
 
@@ -176,15 +193,14 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> VDBVolume::AlignScan(
     grad << 0, 0, 0, 0, 0, 0;
 
     int n_iters = 0;
-    int max_iters = 50;
-    double error_threshold = 1e-1;
+    int max_iters = 100;
+    double error_threshold = 5e-3;
 
     while (true) {
         A.setConstant(0);
         b.setConstant(0);
 
-        auto se3_old = T.log();
-
+        float count = 0;
         std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
             Eigen::Vector3d point_ = T * point;
 
@@ -193,16 +209,26 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> VDBVolume::AlignScan(
             auto voxel = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
 
             auto sdf = tsdf_acc.getValue(voxel);
+            if (std::abs(sdf) < sdf_trunc_ / 2) {
+                count += 1;
+                auto grad_sdf_vdb = grad_acc.getValue(voxel);
+                // std::cout << std::abs(sdf) << ", " << grad_sdf_vdb << "\n";
+                Eigen::Vector3d grad_sdf(grad_sdf_vdb.x(), grad_sdf_vdb.y(), grad_sdf_vdb.z());
 
-            auto grad_sdf_vdb = grad_acc.getValue(voxel);
-            Eigen::Vector3d grad_sdf(grad_sdf_vdb.x(), grad_sdf_vdb.y(), grad_sdf_vdb.z());
+                grad_pt.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_);
+                grad = (grad_sdf.transpose() * grad_pt).transpose();
 
-            grad_pt.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_);
-            grad = (grad_sdf.transpose() * grad_pt).transpose();
-
-            A += grad * grad.transpose();
-            b += sdf * grad;
+                A += grad * grad.transpose();
+                b += sdf * grad;
+            }
         });
+
+        // std::cout << "Ratio of pts inside the truncation region = " << count / points.size()
+        //           << "\n";
+        // A = A / count;
+        // b = b / count;
+
+        auto se3_old = T.log();
 
         auto se3_new = se3_old - A.inverse() * b;
         T = Sophus::SE3d::exp(se3_new);

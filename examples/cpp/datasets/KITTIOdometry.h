@@ -42,7 +42,6 @@ public:
     explicit KITTIDataset(const std::string& kitti_root_dir,
                           const std::string& sequence,
                           int n_scans = -1,
-                          bool apply_pose = true,
                           bool preprocess = true,
                           float min_range = 0.0F,
                           float max_range = std::numeric_limits<float>::max());
@@ -52,7 +51,7 @@ public:
     [[nodiscard]] std::size_t size() const { return scan_files_.size(); }
 
 public:
-    bool apply_pose_ = true;
+    // bool apply_pose_ = true;
     bool preprocess_ = true;
     float min_range_ = 0.0F;
     float max_range_ = std::numeric_limits<float>::max();

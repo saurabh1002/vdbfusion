@@ -51,7 +51,6 @@ struct VDBFusionConfig {
 
 namespace datasets {
 struct KITTIConfig {
-    bool apply_pose_;
     bool preprocess_;
     float min_range_;
     float max_range_;
@@ -60,8 +59,7 @@ struct KITTIConfig {
         std::ifstream config_file(path, std::ios_base::in);
         auto config = YAML::Load(config_file);
 
-        return KITTIConfig{config["apply_pose"].as<bool>(),  //
-                           config["preprocess"].as<bool>(),  //
+        return KITTIConfig{config["preprocess"].as<bool>(),  //
                            config["min_range"].as<float>(),  //
                            config["max_range"].as<float>()};
     }

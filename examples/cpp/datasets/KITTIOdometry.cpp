@@ -85,14 +85,6 @@ void PreProcessCloud(std::vector<Eigen::Vector3d>& points, float min_range, floa
         points.end());
 }
 
-void TransformPoints(std::vector<Eigen::Vector3d>& points, const Eigen::Matrix4d& transformation) {
-    for (auto& point : points) {
-        Eigen::Vector4d new_point =
-            transformation * Eigen::Vector4d(point(0), point(1), point(2), 1.0);
-        point = new_point.head<3>() / new_point(3);
-    }
-}
-
 std::vector<Eigen::Matrix4d> GetGTPoses(const fs::path& poses_file, const fs::path& calib_file) {
     std::vector<Eigen::Matrix4d> poses;
     Eigen::Matrix4d T_cam_velo = Eigen::Matrix4d::Zero();
@@ -154,14 +146,10 @@ KITTIDataset::KITTIDataset(const std::string& kitti_root_dir,
 KITTIDataset::KITTIDataset(const std::string& kitti_root_dir,
                            const std::string& sequence,
                            int n_scans,
-                           bool apply_pose,
                            bool preprocess,
                            float min_range,
                            float max_range)
-    : apply_pose_(apply_pose),
-      preprocess_(preprocess),
-      min_range_(min_range),
-      max_range_(max_range) {
+    : preprocess_(preprocess), min_range_(min_range), max_range_(max_range) {
     auto kitti_root_dir_ = fs::absolute(fs::path(kitti_root_dir));
     auto kitti_sequence_dir = fs::absolute(fs::path(kitti_root_dir) / "sequences" / sequence);
 
@@ -174,7 +162,6 @@ KITTIDataset::KITTIDataset(const std::string& kitti_root_dir,
 std::tuple<std::vector<Eigen::Vector3d>, Eigen::Vector3d> KITTIDataset::operator[](int idx) const {
     std::vector<Eigen::Vector3d> points = ReadKITTIVelodyne(scan_files_[idx]);
     if (preprocess_) PreProcessCloud(points, min_range_, max_range_);
-    if (apply_pose_) TransformPoints(points, poses_[idx]);
     const Eigen::Vector3d origin = poses_[idx].block<3, 1>(0, 3);
     return std::make_tuple(points, origin);
 }
