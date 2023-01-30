@@ -47,7 +47,7 @@ public:
                           float max_range = std::numeric_limits<float>::max());
 
     /// Returns a point cloud and the origin of the sensor in world coordinate frames
-    [[nodiscard]] std::tuple<PointCloud, Point> operator[](int idx) const;
+    [[nodiscard]] std::tuple<float, PointCloud, Point> operator[](int idx) const;
     [[nodiscard]] std::size_t size() const { return scan_files_.size(); }
 
 public:
@@ -57,6 +57,7 @@ public:
     float max_range_ = std::numeric_limits<float>::max();
 
 private:
+    std::vector<double> timestamps_;
     std::vector<std::string> scan_files_;
     std::vector<Eigen::Matrix4d> poses_;
 };

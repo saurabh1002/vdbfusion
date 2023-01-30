@@ -37,7 +37,7 @@ namespace vdbfusion {
 
 class VDBVolume {
 public:
-    VDBVolume(float voxel_size, float sdf_trunc, float clipping_range, bool space_carving = false);
+    VDBVolume(float voxel_size, float sdf_trunc, bool space_carving = false);
     ~VDBVolume() = default;
 
 public:
@@ -65,15 +65,6 @@ public:
                     const openvdb::Coord& voxel,
                     const std::function<float(float)>& weighting_function);
 
-    /// @brief Compute the Gradients of the Signed Distance Field at each voxel location
-    openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr ComputeGradient(
-        openvdb::FloatGrid::Ptr grid) const;
-
-    openvdb::FloatGrid::Ptr ClipVolume(const Sophus::SE3d& T) const;
-
-    std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> AlignScan(
-        const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf);
-
     /// @brief Prune TSDF grids, ideal utility to cleanup a D(x) volume before exporting it
     openvdb::FloatGrid::Ptr Prune(float min_weight) const;
 
@@ -90,8 +81,31 @@ public:
     /// VDBVolume public properties
     float voxel_size_;
     float sdf_trunc_;
-    float clipping_range_;
     bool space_carving_;
+};
+
+class ImplicitRegistration {
+public:
+    ImplicitRegistration(VDBVolume& vdb_volume_global, float clipping_range);
+    ~ImplicitRegistration() = default;
+
+public:
+    Sophus::SE3d ConstantVelocityModel() const;
+
+    /// @brief Compute the Gradients of the Signed Distance Field at each voxel location
+    openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr ComputeGradient(
+        const openvdb::FloatGrid::Ptr grid) const;
+
+    openvdb::FloatGrid::Ptr ClipVolume(const Sophus::SE3d& T) const;
+
+    std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> AlignScan(
+        const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf);
+
+public:
+    VDBVolume vdb_volume_global_;
+    float clipping_range_;
+    Sophus::SE3d T_1{};
+    Sophus::SE3d T_2{};
 };
 
 }  // namespace vdbfusion

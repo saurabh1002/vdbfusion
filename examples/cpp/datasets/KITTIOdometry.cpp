@@ -85,14 +85,22 @@ void PreProcessCloud(std::vector<Eigen::Vector3d>& points, float min_range, floa
         points.end());
 }
 
-std::vector<Eigen::Matrix4d> GetGTPoses(const fs::path& poses_file, const fs::path& calib_file) {
+std::tuple<std::vector<double>, std::vector<Eigen::Matrix4d>> GetGTPoses(
+    const fs::path& poses_file, const fs::path& calib_file, const fs::path& timestamps_file) {
+    std::vector<double> timestamps;
     std::vector<Eigen::Matrix4d> poses;
     Eigen::Matrix4d T_cam_velo = Eigen::Matrix4d::Zero();
     Eigen::Matrix4d T_velo_cam = Eigen::Matrix4d::Zero();
 
     // auxiliary variables to read the txt files
     std::string ss;
+    double timestamp;
     float P_00, P_01, P_02, P_03, P_10, P_11, P_12, P_13, P_20, P_21, P_22, P_23;
+
+    std::ifstream timestamp_in(timestamps_file, std::ios_base::in);
+    while (timestamp_in >> timestamp) {
+        timestamps.emplace_back(timestamp);
+    }
 
     std::ifstream calib_in(calib_file, std::ios_base::in);
     // clang-format off
@@ -124,7 +132,7 @@ std::vector<Eigen::Matrix4d> GetGTPoses(const fs::path& poses_file, const fs::pa
         poses.emplace_back(T_velo_cam * P * T_cam_velo);
     }
     // clang-format on
-    return poses;
+    return std::make_tuple(timestamps, poses);
 }
 
 }  // namespace
@@ -138,8 +146,9 @@ KITTIDataset::KITTIDataset(const std::string& kitti_root_dir,
     auto kitti_sequence_dir = fs::absolute(fs::path(kitti_root_dir) / "sequences" / sequence);
 
     // Read data, cache it inside the class.
-    poses_ = GetGTPoses(kitti_root_dir_ / "poses" / std::string(sequence + ".txt"),
-                        kitti_sequence_dir / "calib.txt");
+    std::tie(timestamps_, poses_) =
+        GetGTPoses(kitti_root_dir_ / "poses" / std::string(sequence + ".txt"),
+                   kitti_sequence_dir / "calib.txt", kitti_sequence_dir / "times.txt");
     scan_files_ = GetVelodyneFiles(fs::absolute(kitti_sequence_dir / "velodyne/"), n_scans);
 }
 
@@ -154,15 +163,18 @@ KITTIDataset::KITTIDataset(const std::string& kitti_root_dir,
     auto kitti_sequence_dir = fs::absolute(fs::path(kitti_root_dir) / "sequences" / sequence);
 
     // Read data, cache it inside the class.
-    poses_ = GetGTPoses(kitti_root_dir_ / "poses" / std::string(sequence + ".txt"),
-                        kitti_sequence_dir / "calib.txt");
+    std::tie(timestamps_, poses_) =
+        GetGTPoses(kitti_root_dir_ / "poses" / std::string(sequence + ".txt"),
+                   kitti_sequence_dir / "calib.txt", kitti_sequence_dir / "times.txt");
     scan_files_ = GetVelodyneFiles(fs::absolute(kitti_sequence_dir / "velodyne/"), n_scans);
 }
 
-std::tuple<std::vector<Eigen::Vector3d>, Eigen::Vector3d> KITTIDataset::operator[](int idx) const {
+std::tuple<float, std::vector<Eigen::Vector3d>, Eigen::Vector3d> KITTIDataset::operator[](
+    int idx) const {
     std::vector<Eigen::Vector3d> points = ReadKITTIVelodyne(scan_files_[idx]);
     if (preprocess_) PreProcessCloud(points, min_range_, max_range_);
     const Eigen::Vector3d origin = poses_[idx].block<3, 1>(0, 3);
-    return std::make_tuple(points, origin);
+    const float timestamp = timestamps_[idx];
+    return std::make_tuple(timestamp, points, origin);
 }
 }  // namespace datasets

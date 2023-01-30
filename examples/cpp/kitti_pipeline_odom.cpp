@@ -86,7 +86,7 @@ public:
     };
 
 public:
-    void operator()(vdbfusion::VDBVolume& vdbvolume, const Sophus::SE3d& T) {
+    void operator()(vdbfusion::ImplicitRegistration& pipeline, const Sophus::SE3d& T) {
         if ((n_iters + 1) % N == 0) {
             {
                 auto map_name =
@@ -95,16 +95,15 @@ public:
                                 "seq"_a = sequence_, "n_scans"_a = n_iters + 1);
                 timers::ScopeTimer timer("Writing VDB grid to disk");
                 std::string filename = fmt::format("{map_name}.vdb", "map_name"_a = map_name);
-                openvdb::io::File(filename).write({vdbvolume.tsdf_});
+                openvdb::io::File(filename).write({pipeline.vdb_volume_global_.tsdf_});
             }
-
             {
                 auto grad_name =
                     fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans_grad",
                                 "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
                                 "seq"_a = sequence_, "n_scans"_a = n_iters + 1);
                 timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
-                auto grad_grid = vdbvolume.ComputeGradient(vdbvolume.ClipVolume(T));
+                auto grad_grid = pipeline.ComputeGradient(pipeline.ClipVolume(T));
                 std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
                 openvdb::io::File(filename).write({grad_grid});
             }
@@ -141,7 +140,9 @@ int main(int argc, char* argv[]) {
 
     fmt::print("Integrating {} scans\n", dataset.size());
     vdbfusion::VDBVolume tsdf_volume(vdbfusion_cfg.voxel_size_, vdbfusion_cfg.sdf_trunc_,
-                                     kitti_cfg.max_range_, vdbfusion_cfg.space_carving_);
+                                     vdbfusion_cfg.space_carving_);
+    vdbfusion::ImplicitRegistration registration_pipeline(tsdf_volume, kitti_cfg.max_range_);
+
     timers::FPSTimer<10> timer;
     DataSaver<25> datasaver(argparser, sequence);
     bool init_scan = true;
@@ -150,10 +151,16 @@ int main(int argc, char* argv[]) {
     std::vector<Eigen::Matrix<double, 3, 4>> poses;
     poses.reserve(dataset.size());
 
-    for (const auto& [scan, origin] : iterable(dataset)) {
+    int scan_nr = 0;
+    for (const auto& [timestamp, scan, origin] : iterable(dataset)) {
         timer.tic();
+        if (scan_nr < 0) {
+            scan_nr++;
+            continue;
+        }
+
         if (!init_scan) {
-            auto [aligned_scan, T] = tsdf_volume.AlignScan(scan, init_tf);
+            auto [aligned_scan, T] = registration_pipeline.AlignScan(scan, init_tf);
             tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float) { return 1.0; });
             poses.emplace_back(T.matrix3x4());
             init_tf = T;
@@ -162,6 +169,7 @@ int main(int argc, char* argv[]) {
             poses.emplace_back(init_tf.matrix3x4());
             init_scan = false;
         }
+        scan_nr++;
         // datasaver(tsdf_volume, init_tf);
         timer.toc();
     }
