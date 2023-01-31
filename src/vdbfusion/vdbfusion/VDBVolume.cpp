@@ -195,7 +195,10 @@ ImplicitRegistration::ImplicitRegistration(VDBVolume& vdb_volume_global, float c
 
 openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr
 ImplicitRegistration::ComputeGradient(const openvdb::FloatGrid::Ptr grid) const {
-    openvdb::tools::Gradient<openvdb::FloatGrid> grad_op(*grid);
+    openvdb::tools::Gradient<openvdb::FloatGrid,
+                             openvdb::tools::gridop::ToMaskGrid<openvdb::FloatGrid>::Type,
+                             openvdb::util::NullInterrupter, openvdb::math::CD_4TH>
+        grad_op(*grid);
     return grad_op.process(true);
 }
 
@@ -251,8 +254,8 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> ImplicitRegistration::Ali
     const auto tsdf_acc = local_tsdf->getConstUnsafeAccessor();
     const auto grad_acc = local_tsdf_grad->getConstUnsafeAccessor();
 
-    auto T_pred = ConstantVelocityModel();
-    auto T = init_tf * T_pred;
+    // auto T_pred = ConstantVelocityModel();
+    auto T = init_tf;
 
     Matrix6x6d A;
     Matrix6x1d b;
