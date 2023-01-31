@@ -98,8 +98,10 @@ public:
 
     openvdb::FloatGrid::Ptr ClipVolume(const Sophus::SE3d& T) const;
 
-    std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> AlignScan(
+    std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d, int> AlignScan(
         const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf);
+
+    void RMSError(const std::vector<Eigen::Vector3d>& points);
 
 public:
     VDBVolume vdb_volume_global_;

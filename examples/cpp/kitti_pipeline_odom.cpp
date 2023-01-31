@@ -160,10 +160,13 @@ int main(int argc, char* argv[]) {
         }
 
         if (!init_scan) {
-            auto [aligned_scan, T] = registration_pipeline.AlignScan(scan, init_tf);
-            tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float) { return 1.0; });
-            poses.emplace_back(T.matrix3x4());
-            init_tf = T;
+            auto [aligned_scan, T, n_iters] = registration_pipeline.AlignScan(scan, init_tf);
+            if (n_iters < 150) {
+                tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float) { return 1.0; });
+                poses.emplace_back(T.matrix3x4());
+                init_tf = T;
+                // registration_pipeline.RMSError(aligned_scan);
+            }
         } else {
             tsdf_volume.Integrate(scan, origin, [](float /*unused*/) { return 1.0; });
             poses.emplace_back(init_tf.matrix3x4());

@@ -243,7 +243,7 @@ Sophus::SE3d ImplicitRegistration::ConstantVelocityModel() const {
     return T_pred;
 }
 
-std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> ImplicitRegistration::AlignScan(
+std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d, int> ImplicitRegistration::AlignScan(
     const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf) {
     const openvdb::FloatGrid::Ptr local_tsdf = this->ClipVolume(init_tf);
     const auto local_tsdf_grad = this->ComputeGradient(local_tsdf);
@@ -254,8 +254,8 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> ImplicitRegistration::Ali
     const auto tsdf_acc = local_tsdf->getConstUnsafeAccessor();
     const auto grad_acc = local_tsdf_grad->getConstUnsafeAccessor();
 
-    // auto T_pred = ConstantVelocityModel();
-    auto T = init_tf;
+    auto T_pred = ConstantVelocityModel();
+    auto T = init_tf * T_pred;
 
     Matrix6x6d A;
     Matrix6x1d b;
@@ -271,15 +271,7 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> ImplicitRegistration::Ali
     int max_iters = 150;
     double error_threshold = 5e-3;
 
-    // LM related tuning
-    // double lambda = 1e-2;
-    // int lambda_up_factor = 10;
-    // int lambda_down_factor = 10;
-
-    // double prev_sum_sdf = std::numeric_limits<double>::max();
-    double new_sum_sdf = 0;
-
-    auto sdf_threshold = vdb_volume_global_.sdf_trunc_ / 2;
+    auto k = vdb_volume_global_.sdf_trunc_ / 3;
 
     while (true) {
         A.setConstant(0);
@@ -292,42 +284,24 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> ImplicitRegistration::Ali
             float distance = tsdf_acc.getValue(voxel_tsdf);
 
             // Sensitive to this params
-            if (std::abs(distance) < sdf_threshold) {
-                // double weight = 1 - std::pow((distance / sdf_threshold), 4);
-                auto index_pos = local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point_g));
-                auto voxel_grad = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
-                auto grad_sdf = VDB2Eigen::Vec3<double>(grad_acc.getValue(voxel_grad));
+            double weight = k / std::pow(std::pow(distance, 2) + k, 2);
+            index_pos = local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point_g));
+            auto voxel_grad = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
+            auto grad_sdf = VDB2Eigen::Vec3<double>(grad_acc.getValue(voxel_grad));
 
-                grad_pt.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_g);
-                auto grad = grad_pt.transpose() * grad_sdf;
+            grad_pt.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_g);
+            auto grad = grad_pt.transpose() * grad_sdf;
 
-                A += grad * grad.transpose();
-                b += distance * grad;
-            }
+            A += weight * grad * grad.transpose();
+            b += weight * distance * grad;
         });
         auto se3_old = T.log();
 
-        // auto B = Eigen::Matrix<double, 6, 6>::Identity();
         auto se3_new = se3_old - A.inverse() * b;
         T = Sophus::SE3d::exp(se3_new);
 
         T_2 = T_1;
         T_1 = T;
-        // points_g = ApplyTransform(points, T);
-        // std::for_each(points_g.cbegin(), points_g.cend(), [&](const Eigen::Vector3d& point_g) {
-        //     auto voxel_tsdf = openvdb::math::Coord::round(
-        //         local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point_g)));
-        //     new_sum_sdf += std::pow(tsdf_acc.getValue(voxel_tsdf), 2);
-        // });
-        // if (new_sum_sdf > prev_sum_sdf) {
-        //     lambda *= lambda_up_factor;
-        //     T = Sophus::SE3d::exp(se3_old);
-        // } else {
-        //     lambda /= lambda_down_factor;
-        // }
-
-        // prev_sum_sdf = new_sum_sdf;
-        // new_sum_sdf = 0;
 
         n_iters++;
 
@@ -337,16 +311,21 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d> ImplicitRegistration::Ali
             break;
         }
     }
-
     auto aligned_points = ApplyTransform(points, T);
-    std::for_each(
-        aligned_points.cbegin(), aligned_points.cend(), [&](const Eigen::Vector3d& point) {
-            auto voxel_tsdf =
-                openvdb::math::Coord::round(local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point)));
-            new_sum_sdf += std::pow(tsdf_acc.getValue(voxel_tsdf), 2);
-        });
-    std::cout << "RMS: " << std::sqrt(new_sum_sdf / aligned_points.size()) << "\n";
 
-    return std::make_tuple(aligned_points, T);
+    return std::make_tuple(aligned_points, T, n_iters);
 }
+
+void ImplicitRegistration::RMSError(const std::vector<Eigen::Vector3d>& points) {
+    double sum = 0;
+    auto tsdf_acc = vdb_volume_global_.tsdf_->getConstUnsafeAccessor();
+    auto local_tsdf_xform = vdb_volume_global_.tsdf_->transform();
+    std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
+        auto voxel_tsdf =
+            openvdb::math::Coord::round(local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point)));
+        sum += std::pow(tsdf_acc.getValue(voxel_tsdf), 2);
+    });
+    std::cout << "RMS: " << std::sqrt(sum / points.size()) << "\n";
+}
+
 }  // namespace vdbfusion

@@ -157,6 +157,14 @@ PYBIND11_MODULE(vdbfusion_pybind, m) {
         .def_readwrite("_voxel_size", &VDBVolume::voxel_size_)
         .def_readwrite("_sdf_trunc", &VDBVolume::sdf_trunc_)
         .def_readwrite("_space_carving", &VDBVolume::space_carving_);
-}
 
+    py::class_<ImplicitRegistration, std::shared_ptr<ImplicitRegistration>> implicit_registration(
+        m, "_ImplicitRegistration",
+        "This is the low level C++ bindings, all the methods and "
+        "constructor defined within this module (starting with a ``_`` "
+        "should not be used. Please refer to the python Processor class to "
+        "check how to use the API");
+    implicit_registration.def(py::init<VDBVolume, float>(), "vdb_volume_global"_a,
+                              "clipping_range"_a)
+}
 }  // namespace vdbfusion

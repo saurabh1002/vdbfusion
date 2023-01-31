@@ -22,7 +22,7 @@
 
 # VDBFUSION
 voxel_size: 0.1
-sdf_trunc: 2.5
+sdf_trunc: 3.0
 space_carving: False
 
 # Reconstruction
