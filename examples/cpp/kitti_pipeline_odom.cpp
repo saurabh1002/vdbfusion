@@ -137,11 +137,20 @@ int main(int argc, char* argv[]) {
     const auto dataset =
         datasets::KITTIDataset(kitti_root_dir, sequence, n_scans, kitti_cfg.preprocess_,
                                kitti_cfg.min_range_, kitti_cfg.max_range_);
-
     fmt::print("Integrating {} scans\n", dataset.size());
+
+    // Init VDB Volume
     vdbfusion::VDBVolume tsdf_volume(vdbfusion_cfg.voxel_size_, vdbfusion_cfg.sdf_trunc_,
                                      vdbfusion_cfg.space_carving_);
-    vdbfusion::ImplicitRegistration registration_pipeline(tsdf_volume, kitti_cfg.max_range_);
+
+    // Init registration class
+    vdbfusion::registrationConfigParams config;
+    config.use_constant_velocity_model_ = true;
+    config.use_clipped_tsdf = true;
+    config.max_iters_ = 2000;
+    config.convergence_threshold_ = 5e-3;
+    config.clipping_range_ = kitti_cfg.max_range_;
+    vdbfusion::ImplicitRegistration registration_pipeline(tsdf_volume, config);
 
     timers::FPSTimer<10> timer;
     DataSaver<25> datasaver(argparser, sequence);
@@ -161,12 +170,10 @@ int main(int argc, char* argv[]) {
 
         if (!init_scan) {
             auto [aligned_scan, T, n_iters] = registration_pipeline.AlignScan(scan, init_tf);
-            if (n_iters < 150) {
-                tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float) { return 1.0; });
-                poses.emplace_back(T.matrix3x4());
-                init_tf = T;
-                // registration_pipeline.RMSError(aligned_scan);
-            }
+            tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float) { return 1.0; });
+            poses.emplace_back(T.matrix3x4());
+            init_tf = T;
+            registration_pipeline.RMSError(aligned_scan);
         } else {
             tsdf_volume.Integrate(scan, origin, [](float /*unused*/) { return 1.0; });
             poses.emplace_back(init_tf.matrix3x4());

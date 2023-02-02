@@ -190,8 +190,9 @@ openvdb::FloatGrid::Ptr VDBVolume::Prune(float min_weight) const {
     return clean_tsdf;
 }
 
-ImplicitRegistration::ImplicitRegistration(VDBVolume& vdb_volume_global, float clipping_range)
-    : vdb_volume_global_(vdb_volume_global), clipping_range_(clipping_range) {}
+ImplicitRegistration::ImplicitRegistration(VDBVolume& vdb_volume_global,
+                                           const registrationConfigParams& config)
+    : vdb_volume_global_(vdb_volume_global), config_(config) {}
 
 openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr
 ImplicitRegistration::ComputeGradient(const openvdb::FloatGrid::Ptr grid) const {
@@ -204,34 +205,27 @@ ImplicitRegistration::ComputeGradient(const openvdb::FloatGrid::Ptr grid) const 
 
 openvdb::FloatGrid::Ptr ImplicitRegistration::ClipVolume(const Sophus::SE3d& T) const {
     auto center = Eigen2VDB::Vec3(T.translation());
-    openvdb::BBoxd bbox(center - clipping_range_, center + clipping_range_);
+    auto clip_val = config_.clipping_range_;
+    openvdb::BBoxd bbox(center - clip_val, center + clip_val);
 
     auto R = T.rotationMatrix();
 
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{-clipping_range_, -clipping_range_, -clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, -clip_val, -clip_val}));
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{-clipping_range_, -clipping_range_, clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, -clip_val, clip_val}));
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{-clipping_range_, clipping_range_, -clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, clip_val, -clip_val}));
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{-clipping_range_, clipping_range_, clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, clip_val, clip_val}));
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{clipping_range_, -clipping_range_, -clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, -clip_val, -clip_val}));
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{clipping_range_, -clipping_range_, clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, -clip_val, clip_val}));
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{clipping_range_, clipping_range_, -clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, clip_val, -clip_val}));
     bbox.expand(center +
-                Eigen2VDB::Vec3<double>(
-                    R * Eigen::Vector3d{clipping_range_, clipping_range_, clipping_range_}));
+                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, clip_val, clip_val}));
     return openvdb::tools::clip(*vdb_volume_global_.tsdf_, bbox);
 }
 
@@ -245,7 +239,8 @@ Sophus::SE3d ImplicitRegistration::ConstantVelocityModel() const {
 
 std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d, int> ImplicitRegistration::AlignScan(
     const std::vector<Eigen::Vector3d>& points, const Sophus::SE3d& init_tf) {
-    const openvdb::FloatGrid::Ptr local_tsdf = this->ClipVolume(init_tf);
+    // const openvdb::FloatGrid::Ptr local_tsdf = this->ClipVolume(init_tf);
+    auto local_tsdf = vdb_volume_global_.tsdf_;
     const auto local_tsdf_grad = this->ComputeGradient(local_tsdf);
 
     const auto local_tsdf_xform = local_tsdf->transform();
@@ -254,24 +249,21 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d, int> ImplicitRegistration
     const auto tsdf_acc = local_tsdf->getConstUnsafeAccessor();
     const auto grad_acc = local_tsdf_grad->getConstUnsafeAccessor();
 
-    auto T_pred = ConstantVelocityModel();
-    auto T = init_tf * T_pred;
+    auto T = init_tf;
+    if (config_.use_constant_velocity_model_) T = T * ConstantVelocityModel();
 
     Matrix6x6d A;
     Matrix6x1d b;
 
     // clang-format off
-    Matrix3x6d grad_pt;
-    grad_pt << 1, 0, 0, 0, 0, 0,
+    Matrix3x6d grad_tf;
+    grad_tf << 1, 0, 0, 0, 0, 0,
                0, 1, 0, 0, 0, 0,
                0, 0, 1, 0, 0, 0;
     // clang-format on
 
     int n_iters = 0;
-    int max_iters = 150;
-    double error_threshold = 5e-3;
-
-    auto k = vdb_volume_global_.sdf_trunc_ / 3;
+    auto m_scale = vdb_volume_global_.sdf_trunc_ / 3;
 
     while (true) {
         A.setConstant(0);
@@ -284,20 +276,21 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d, int> ImplicitRegistration
             float distance = tsdf_acc.getValue(voxel_tsdf);
 
             // Sensitive to this params
-            double weight = k / std::pow(std::pow(distance, 2) + k, 2);
-            index_pos = local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point_g));
-            auto voxel_grad = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
-            auto grad_sdf = VDB2Eigen::Vec3<double>(grad_acc.getValue(voxel_grad));
+            if (distance < vdb_volume_global_.sdf_trunc_) {
+                index_pos = local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point_g));
+                auto voxel_grad = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
+                auto grad_sdf = VDB2Eigen::Vec3<double>(grad_acc.getValue(voxel_grad));
 
-            grad_pt.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_g);
-            auto grad = grad_pt.transpose() * grad_sdf;
+                grad_tf.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_g);
+                auto grad = grad_tf.transpose() * grad_sdf;
 
-            A += weight * grad * grad.transpose();
-            b += weight * distance * grad;
+                double weight = m_scale / std::pow(std::pow(distance, 2) + m_scale, 2);
+                A += weight * grad * grad.transpose();
+                b += weight * distance * grad;
+            }
         });
         auto se3_old = T.log();
-
-        auto se3_new = se3_old - A.inverse() * b;
+        auto se3_new = se3_old - (A.inverse() * b);
         T = Sophus::SE3d::exp(se3_new);
 
         T_2 = T_1;
@@ -305,8 +298,8 @@ std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d, int> ImplicitRegistration
 
         n_iters++;
 
-        if (n_iters > max_iters ||
-            (se3_new - se3_old).lpNorm<Eigen::Infinity>() < error_threshold) {
+        if (n_iters > config_.max_iters_ ||
+            (se3_new - se3_old).lpNorm<2>() < config_.convergence_threshold_) {
             std::cout << "Scan Aligning converged; n_iters = " << n_iters << "\n";
             break;
         }
@@ -327,5 +320,4 @@ void ImplicitRegistration::RMSError(const std::vector<Eigen::Vector3d>& points) 
     });
     std::cout << "RMS: " << std::sqrt(sum / points.size()) << "\n";
 }
-
 }  // namespace vdbfusion

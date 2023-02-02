@@ -84,9 +84,17 @@ public:
     bool space_carving_;
 };
 
+struct registrationConfigParams {
+    bool use_constant_velocity_model_;
+    bool use_clipped_tsdf;
+    int max_iters_;
+    double convergence_threshold_;
+    double clipping_range_;
+};
+
 class ImplicitRegistration {
 public:
-    ImplicitRegistration(VDBVolume& vdb_volume_global, float clipping_range);
+    ImplicitRegistration(VDBVolume& vdb_volume_global, const registrationConfigParams& config);
     ~ImplicitRegistration() = default;
 
 public:
@@ -105,7 +113,7 @@ public:
 
 public:
     VDBVolume vdb_volume_global_;
-    float clipping_range_;
+    registrationConfigParams config_;
     Sophus::SE3d T_1{};
     Sophus::SE3d T_2{};
 };
