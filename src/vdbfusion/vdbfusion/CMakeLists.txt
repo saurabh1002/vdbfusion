@@ -26,6 +26,9 @@ project(VDBFusion VERSION 0.1.6 LANGUAGES CXX)
 add_library(vdbfusion STATIC)
 add_library(VDBFusion::vdbfusion ALIAS vdbfusion)
 
+add_library(registration STATIC)
+add_library(VDBFusion::registration ALIAS registration)
+
 # In case we are building this as a standalone project, we should look here the dependencies
 if(NOT TARGET Eigen3::Eigen OR NOT TARGET OpenVDB::openvdb)
   message(STATUS "Building only VDBFusion C++ module")
@@ -43,7 +46,16 @@ set_target_properties(vdbfusion PROPERTIES PUBLIC_HEADER "VDBVolume.h")
 target_include_directories(
   vdbfusion PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
                                                        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
-target_link_libraries(vdbfusion PUBLIC Eigen3::Eigen OpenVDB::openvdb sophus::sophus)
+target_link_libraries(vdbfusion PUBLIC Eigen3::Eigen OpenVDB::openvdb)
+
+target_sources(registration PRIVATE ImplicitRegistration.cpp)
+target_compile_features(registration PUBLIC cxx_std_17)
+target_compile_options(registration PRIVATE -Wall -Wextra)
+set_target_properties(registration PROPERTIES PUBLIC_HEADER "ImplicitRegistration.h")
+target_include_directories(
+  registration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+                                                       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(registration PUBLIC vdbfusion Eigen3::Eigen OpenVDB::openvdb sophus::sophus)
 
 # NOTE: Installation is still work in progress, therefore we only support dev machines with all the 3rdparty
 # dependencies locally installed

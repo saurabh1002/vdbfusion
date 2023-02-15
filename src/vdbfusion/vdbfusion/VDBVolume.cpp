@@ -24,30 +24,17 @@
 
 // OpenVDB
 #include <openvdb/Types.h>
-#include <openvdb/math/BBox.h>
 #include <openvdb/math/DDA.h>
 #include <openvdb/math/Ray.h>
 #include <openvdb/openvdb.h>
-#include <openvdb/tools/Clip.h>
-#include <openvdb/tools/GridOperators.h>
 
 #include <Eigen/Core>
 #include <algorithm>
-#include <cmath>
 #include <functional>
 #include <iostream>
-#include <memory>
-#include <tuple>
 #include <vector>
 
-#include "utils/conversions.h"
-
-using Sophus::SE3d;
 using PointCloud = std::vector<Eigen::Vector3d>;
-
-typedef Eigen::Matrix<double, 3, 6> Matrix3x6d;
-typedef Eigen::Matrix<double, 6, 6> Matrix6x6d;
-typedef Eigen::Matrix<double, 6, 1> Matrix6x1d;
 
 namespace {
 float ComputeSDF(const Eigen::Vector3d& origin,
@@ -66,19 +53,6 @@ Eigen::Vector3d GetVoxelCenter(const openvdb::Coord& voxel, const openvdb::math:
     openvdb::math::Vec3d v_wf = xform.indexToWorld(voxel) + voxel_size / 2.0;
     return Eigen::Vector3d(v_wf.x(), v_wf.y(), v_wf.z());
 }
-
-PointCloud ApplyTransform(const PointCloud& pcl, const SE3d& T) {
-    auto R = T.rotationMatrix();
-    auto tr = T.translation();
-
-    PointCloud pcl_t;
-    pcl_t.reserve(pcl.size());
-
-    std::for_each(pcl.cbegin(), pcl.cend(),
-                  [&](const Eigen::Vector3d& pt) { pcl_t.emplace_back((R * pt) + tr); });
-    return pcl_t;
-}
-
 }  // namespace
 
 namespace vdbfusion {
@@ -190,132 +164,5 @@ openvdb::FloatGrid::Ptr VDBVolume::Prune(float min_weight) const {
         }
     });
     return clean_tsdf;
-}
-
-ImplicitRegistration::ImplicitRegistration(VDBVolume& vdb_volume_global,
-                                           const registrationConfigParams& config)
-    : vdb_volume_global_(vdb_volume_global), config_(config) {}
-
-openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr
-ImplicitRegistration::ComputeGradient(const openvdb::FloatGrid::Ptr grid) const {
-    openvdb::tools::Gradient<openvdb::FloatGrid,
-                             openvdb::tools::gridop::ToMaskGrid<openvdb::FloatGrid>::Type,
-                             openvdb::util::NullInterrupter, openvdb::math::CD_4TH>
-        grad_op(*grid);
-    return grad_op.process(true);
-}
-
-openvdb::FloatGrid::Ptr ImplicitRegistration::ClipVolume(const SE3d& T) const {
-    auto center = Eigen2VDB::Vec3(T.translation());
-    auto clip_val = config_.clipping_range_;
-    openvdb::BBoxd bbox(center - clip_val, center + clip_val);
-
-    auto R = T.rotationMatrix();
-
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, -clip_val, -clip_val}));
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, -clip_val, clip_val}));
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, clip_val, -clip_val}));
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{-clip_val, clip_val, clip_val}));
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, -clip_val, -clip_val}));
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, -clip_val, clip_val}));
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, clip_val, -clip_val}));
-    bbox.expand(center +
-                Eigen2VDB::Vec3<double>(R * Eigen::Vector3d{clip_val, clip_val, clip_val}));
-    return openvdb::tools::clip(*vdb_volume_global_.tsdf_, bbox);
-}
-
-SE3d ImplicitRegistration::ConstantVelocityModel() const {
-    SE3d T_pred{};
-    T_pred.rotationMatrix() = T_2.rotationMatrix().transpose() * T_1.rotationMatrix();
-    T_pred.translation() =
-        T_2.rotationMatrix().transpose() * (T_1.translation() - T_2.translation());
-    return T_pred;
-}
-
-std::tuple<PointCloud, SE3d, int> ImplicitRegistration::AlignScan(const PointCloud& points,
-                                                                  const SE3d& init_tf) {
-    // const openvdb::FloatGrid::Ptr local_tsdf = this->ClipVolume(init_tf);
-    auto local_tsdf = vdb_volume_global_.tsdf_;
-    const auto local_tsdf_grad = this->ComputeGradient(local_tsdf);
-    const auto xform = local_tsdf->transform();
-
-    const auto tsdf_acc = local_tsdf->getConstUnsafeAccessor();
-    const auto grad_acc = local_tsdf_grad->getConstUnsafeAccessor();
-
-    auto T = init_tf;
-    if (config_.use_constant_velocity_model_) T = T * ConstantVelocityModel();
-
-    Matrix6x6d A;
-    Matrix6x1d b;
-
-    // clang-format off
-    Matrix3x6d grad_tf;
-    grad_tf << 1, 0, 0, 0, 0, 0,
-               0, 1, 0, 0, 0, 0,
-               0, 0, 1, 0, 0, 0;
-    // clang-format on
-
-    int n_iters = 0;
-    auto m_scale = vdb_volume_global_.sdf_trunc_ / 3;
-
-    while (true) {
-        A.setConstant(0);
-        b.setConstant(0);
-
-        auto points_g = ApplyTransform(points, T);
-
-        std::for_each(points_g.cbegin(), points_g.cend(), [&](const Eigen::Vector3d& point_g) {
-            auto index_pos = xform.worldToIndex(Eigen2VDB::Vec3(point_g));
-            auto voxel = openvdb::math::Coord(index_pos.x(), index_pos.y(), index_pos.z());
-            float distance = tsdf_acc.getValue(voxel);
-
-            // Sensitive to this params
-            if (std::abs(distance) < vdb_volume_global_.sdf_trunc_) {
-                auto grad_sdf = VDB2Eigen::Vec3<double>(grad_acc.getValue(voxel));
-
-                grad_tf.block<3, 3>(0, 3) = -1 * Sophus::SO3d::hat(point_g);
-                auto grad = grad_tf.transpose() * grad_sdf;
-
-                double weight = m_scale / std::pow(std::pow(distance, 2) + m_scale, 2);
-                A += weight * grad * grad.transpose();
-                b -= weight * distance * grad;
-            }
-        });
-        // auto se3_old = T.log();
-        auto dx = A.ldlt().solve(b);
-        auto dT = SE3d::exp(dx);
-        T = dT * T;
-
-        T_2 = T_1;
-        T_1 = T;
-
-        n_iters++;
-
-        if (n_iters > config_.max_iters_ || dx.lpNorm<2>() < config_.convergence_threshold_) {
-            std::cout << "Scan Aligning converged; n_iters = " << n_iters << "\n";
-            break;
-        }
-    }
-    auto aligned_points = ApplyTransform(points, T);
-    return std::make_tuple(aligned_points, T, n_iters);
-}
-
-void ImplicitRegistration::RMSError(const PointCloud& points) {
-    double sum = 0;
-    auto tsdf_acc = vdb_volume_global_.tsdf_->getConstUnsafeAccessor();
-    auto local_tsdf_xform = vdb_volume_global_.tsdf_->transform();
-    std::for_each(points.cbegin(), points.cend(), [&](const Eigen::Vector3d& point) {
-        auto voxel_tsdf =
-            openvdb::math::Coord::round(local_tsdf_xform.worldToIndex(Eigen2VDB::Vec3(point)));
-        sum += std::pow(tsdf_acc.getValue(voxel_tsdf), 2);
-    });
-    std::cout << "RMS: " << std::sqrt(sum / points.size()) << "\n";
 }
 }  // namespace vdbfusion
