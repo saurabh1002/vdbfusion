@@ -27,6 +27,8 @@ if(CMAKE_PROJECT_NAME STREQUAL PROJECT_NAME)
   find_package(VDBFusion REQUIRED)
 endif()
 
+find_package(rosbag_reader REQUIRED)
+
 set(CMAKE_BUILD_TYPE Release)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -38,3 +40,8 @@ add_executable(kitti_pipeline_odom kitti_pipeline_odom.cpp)
 target_compile_features(kitti_pipeline_odom PUBLIC cxx_std_11)
 target_link_libraries(kitti_pipeline_odom PRIVATE VDBFusion::vdbfusion argparse::argparse fmt::fmt igl::core datasets yaml-cpp)
 set_target_properties(kitti_pipeline_odom PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+
+add_executable(cow_and_lady cow_and_lady.cpp)
+target_compile_features(cow_and_lady PUBLIC cxx_std_11)
+target_link_libraries(cow_and_lady PRIVATE VDBFusion::vdbfusion argparse::argparse fmt::fmt igl::core yaml-cpp rosbag_reader::rosbag_reader)
+set_target_properties(cow_and_lady PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
