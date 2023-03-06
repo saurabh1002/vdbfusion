@@ -38,7 +38,7 @@ add_subdirectory(datasets)
 
 add_executable(kitti_pipeline_odom kitti_pipeline_odom.cpp)
 target_compile_features(kitti_pipeline_odom PUBLIC cxx_std_17)
-target_link_libraries(kitti_pipeline_odom PRIVATE VDBFusion::vdbfusion VDBFusion::registration argparse::argparse fmt::fmt igl::core datasets yaml-cpp)
+target_link_libraries(kitti_pipeline_odom PRIVATE VDBFusion::vdbfusion VDBFusion::registration VDBFusion::preprocessing argparse::argparse fmt::fmt igl::core datasets yaml-cpp)
 set_target_properties(kitti_pipeline_odom PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
 add_executable(cow_and_lady cow_and_lady.cpp)

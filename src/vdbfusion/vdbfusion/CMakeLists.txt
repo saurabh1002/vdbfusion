@@ -29,6 +29,9 @@ add_library(VDBFusion::vdbfusion ALIAS vdbfusion)
 add_library(registration STATIC)
 add_library(VDBFusion::registration ALIAS registration)
 
+add_library(preprocessing STATIC)
+add_library(VDBFusion::preprocessing ALIAS preprocessing)
+
 # In case we are building this as a standalone project, we should look here the dependencies
 if(NOT TARGET Eigen3::Eigen OR NOT TARGET OpenVDB::openvdb)
   message(STATUS "Building only VDBFusion C++ module")
@@ -56,6 +59,15 @@ target_include_directories(
   registration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
                                                        $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 target_link_libraries(registration PUBLIC vdbfusion Eigen3::Eigen OpenVDB::openvdb Sophus::Sophus)
+
+target_sources(preprocessing PRIVATE Preprocessing.cpp)
+target_compile_features(preprocessing PUBLIC cxx_std_17)
+target_compile_options(preprocessing PRIVATE -Wall -Wextra)
+set_target_properties(preprocessing PROPERTIES PUBLIC_HEADER "Preprocessing.h")
+target_include_directories(
+  registration PRIVATE ${CMAKE_CURRENT_SOURCE_DIR} PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
+                                                       $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
+target_link_libraries(preprocessing PUBLIC Eigen3::Eigen Sophus::Sophus)
 
 # NOTE: Installation is still work in progress, therefore we only support dev machines with all the 3rdparty
 # dependencies locally installed

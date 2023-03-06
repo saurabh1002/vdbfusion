@@ -26,6 +26,14 @@ import numpy as np
 
 from . import vdbfusion_pybind
 
+def VoxelDownSample(frame, voxel_size):
+    return np.asarray(vdbfusion_pybind._voxel_down_sample(vdbfusion_pybind._VectorEigen3d(frame), voxel_size))
+
+def Preprocess(frame, max_range, min_range):
+    return np.asarray(vdbfusion_pybind._preprocess(vdbfusion_pybind._VectorEigen3d(frame), max_range, min_range))
+
+def CorrectKittiScan(frame):
+    return np.asarray(vdbfusion_pybind._correct_kitti_scan(vdbfusion_pybind._VectorEigen3d(frame)))
 
 class VDBVolume:
     def __init__(

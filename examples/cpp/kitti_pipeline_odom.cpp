@@ -25,6 +25,7 @@
 #include <igl/write_triangle_mesh.h>
 #include <openvdb/openvdb.h>
 #include <vdbfusion/ImplicitRegistration.h>
+#include <vdbfusion/Preprocessing.h>
 #include <vdbfusion/VDBVolume.h>
 
 #include <argparse/argparse.hpp>
@@ -140,18 +141,6 @@ private:
     std::string sequence_;
 };
 
-PointCloud ApplyTransform(const PointCloud& pcl, const Sophus::SE3d& T) {
-    auto R = T.rotationMatrix();
-    auto tr = T.translation();
-
-    PointCloud pcl_t(pcl.size());
-
-    std::transform(pcl.cbegin(), pcl.cend(), pcl_t.begin(),
-                   [&](const Eigen::Vector3d& pt) { return (R * pt) + tr; });
-
-    return pcl_t;
-}
-
 std::vector<Eigen::Vector3d> TransformPoints(const std::vector<Eigen::Vector3d>& points,
                                              const Eigen::Matrix4d& transformation) {
     std::vector<Eigen::Vector3d> points_new;
@@ -180,9 +169,7 @@ int main(int argc, char* argv[]) {
     auto sequence = argparser.get<std::string>("--sequence");
 
     // Initialize dataset
-    const auto dataset =
-        datasets::KITTIDataset(kitti_root_dir, sequence, n_scans, kitti_cfg.preprocess_,
-                               kitti_cfg.min_range_, kitti_cfg.max_range_);
+    const auto dataset = datasets::KITTIDataset(kitti_root_dir, sequence, n_scans);
     fmt::print("Integrating {} scans\n", dataset.size());
 
     // Init VDB Volume
@@ -208,11 +195,11 @@ int main(int argc, char* argv[]) {
     int count = 50;
     int scan_nr = 0;
     for (const auto& [_, scan, pose] : iterable(dataset)) {
+        auto scan_p = vdbfusion::CorrectKITTIScan(
+            vdbfusion::Preprocess(scan, kitti_cfg.max_range_, kitti_cfg.min_range_));
         timer.tic();
-        // init_tf = Sophus::SE3d(Sophus::makeRotationMatrix(pose.block<3, 3>(0, 0)),
-        //                        pose.block<3, 1>(0, 3)).matrix();
         if (!init_scan) {
-            auto [aligned_scan, T, n_iters] = registration_pipeline.AlignScan(scan, init_tf);
+            auto [aligned_scan, T, n_iters] = registration_pipeline.AlignScan(scan_p, init_tf);
             tsdf_volume.Integrate(aligned_scan, T, [](float) { return 1.0; });
             poses.emplace_back(T.block<3, 4>(0, 0));
             init_tf = T;
@@ -220,7 +207,7 @@ int main(int argc, char* argv[]) {
             std::cout << "difference pose: " << (pose - T).norm() << "\n";
             std::cout << "scan idx: " << scan_nr << "\t iters = " << n_iters << "\n";
         } else {
-            tsdf_volume.Integrate(TransformPoints(scan, pose), pose,
+            tsdf_volume.Integrate(TransformPoints(scan_p, pose), pose,
                                   [](float /*unused*/) { return 1.0; });
             poses.emplace_back(pose.block<3, 4>(0, 0));
 

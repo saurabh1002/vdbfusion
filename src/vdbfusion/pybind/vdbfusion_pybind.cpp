@@ -42,6 +42,7 @@
 
 #include "stl_vector_eigen.h"
 #include "vdbfusion/ImplicitRegistration.h"
+#include "vdbfusion/Preprocessing.h"
 #include "vdbfusion/VDBVolume.h"
 
 PYBIND11_MAKE_OPAQUE(std::vector<Eigen::Vector3d>);
@@ -173,5 +174,14 @@ PYBIND11_MODULE(vdbfusion_pybind, m) {
                  &ImplicitRegistration::AlignScan),
              "pcl_local"_a, "T_init"_a)
         .def_readwrite("_vdb_volume_global", &ImplicitRegistration::vdb_volume_global_);
+
+    m.def("_voxel_down_sample",
+          py::overload_cast<const std::vector<Eigen::Vector3d>&, double>(&VoxelDownsample),
+          "frame"_a, "voxel_size"_a);
+    m.def("_preprocess",
+          py::overload_cast<const std::vector<Eigen::Vector3d>&, double, double>(&Preprocess),
+          "frame"_a, "max_range"_a, "min_range"_a);
+    m.def("_correct_kitti_scan",
+          py::overload_cast<const std::vector<Eigen::Vector3d>&>(&CorrectKITTIScan), "frame"_a);
 }
 }  // namespace vdbfusion

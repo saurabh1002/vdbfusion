@@ -75,15 +75,6 @@ std::vector<Eigen::Vector3d> ReadKITTIVelodyne(const std::string& path) {
     return points;
 }
 
-void PreProcessCloud(std::vector<Eigen::Vector3d>& points, float min_range, float max_range) {
-    points.erase(
-        std::remove_if(points.begin(), points.end(), [&](auto p) { return p.norm() > max_range; }),
-        points.end());
-    points.erase(
-        std::remove_if(points.begin(), points.end(), [&](auto p) { return p.norm() < min_range; }),
-        points.end());
-}
-
 std::vector<Eigen::Matrix4d> GetGTPoses(const fs::path& poses_file, const fs::path& calib_file) {
     std::vector<Eigen::Matrix4d> poses;
     Eigen::Matrix4d T_cam_velo = Eigen::Matrix4d::Zero();
@@ -156,27 +147,9 @@ KITTIDataset::KITTIDataset(const std::string& kitti_root_dir,
     scan_files_ = GetVelodyneFiles(fs::absolute(kitti_sequence_dir / "velodyne/"), n_scans);
 }
 
-KITTIDataset::KITTIDataset(const std::string& kitti_root_dir,
-                           const std::string& sequence,
-                           int n_scans,
-                           bool preprocess,
-                           float min_range,
-                           float max_range)
-    : preprocess_(preprocess), min_range_(min_range), max_range_(max_range) {
-    auto kitti_root_dir_ = fs::absolute(fs::path(kitti_root_dir));
-    auto kitti_sequence_dir = fs::absolute(fs::path(kitti_root_dir) / "sequences" / sequence);
-
-    // Read data, cache it inside the class.
-    poses_ = GetGTPoses(kitti_root_dir_ / "poses" / std::string(sequence + ".txt"),
-                        kitti_sequence_dir / "calib.txt");
-    timestamps_ = GetTimestamps(kitti_sequence_dir / "times.txt");
-    scan_files_ = GetVelodyneFiles(fs::absolute(kitti_sequence_dir / "velodyne/"), n_scans);
-}
-
 std::tuple<float, std::vector<Eigen::Vector3d>, Eigen::Matrix4d> KITTIDataset::operator[](
     int idx) const {
     std::vector<Eigen::Vector3d> points = ReadKITTIVelodyne(scan_files_[idx]);
-    if (preprocess_) PreProcessCloud(points, min_range_, max_range_);
     const float timestamp = timestamps_[idx];
     const auto pose = poses_[idx];
     return std::make_tuple(timestamp, points, pose);

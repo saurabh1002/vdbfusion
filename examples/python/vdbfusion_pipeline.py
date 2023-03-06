@@ -54,7 +54,7 @@ class VDBFusionOdometryPipeline:
         self._res = {}
 
         self._poses = None
-        self.save_interval = 25
+        self.save_interval = 1
 
     def run(self):
         self._run_tsdf_pipeline()
@@ -65,8 +65,11 @@ class VDBFusionOdometryPipeline:
         self._print_tim()
         self._print_metrics()
 
-    def visualize(self):
-        o3d.visualization.draw_geometries([self._res["mesh"]])
+    def visualize(self, pcl):
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(pcl)
+        pcd.paint_uniform_color([1, 0, 0])
+        o3d.visualization.draw_geometries([self._res["mesh"], pcd])
 
     def __len__(self):
         return len(self._dataset)
@@ -84,7 +87,7 @@ class VDBFusionOdometryPipeline:
             tic = time.perf_counter_ns()
             aligned_scan, T, n_iters = self._registration_pipeline.alignScan(scan, init_tf)
             self._tsdf_volume.integrate(aligned_scan, T)
-            self._poses.append(T[:-1].flatten())
+            self._poses.append( self._dataset.apply_inverse_calibration(T)[:-1].flatten())
             toc = time.perf_counter_ns()
 
             init_tf = T
@@ -95,6 +98,7 @@ class VDBFusionOdometryPipeline:
                 self._res = {"mesh": self._get_o3d_mesh(self._tsdf_volume, self._config), "times": times, "iters": iters}
                 self._write_vdb(idx)
                 self._write_ply(idx)
+                self.visualize(aligned_scan)
 
         self._res = {"mesh": self._get_o3d_mesh(self._tsdf_volume, self._config), "times": times, "iters": iters}
         self._poses = np.array(self._poses)

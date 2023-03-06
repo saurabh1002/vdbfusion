@@ -76,7 +76,10 @@ ImplicitRegistration::ImplicitRegistration(VDBVolume& vdb_volume_global,
                                            const float convergence_threshold,
                                            const float clipping_range)
     : vdb_volume_global_(vdb_volume_global),
-      config_({max_iters, convergence_threshold, clipping_range}) {}
+      config_({max_iters, convergence_threshold, clipping_range}) {
+    T_minus_1.setIdentity();
+    T_minus_2.setIdentity();
+}
 
 openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr
 ImplicitRegistration::ComputeGradient(const openvdb::FloatGrid::Ptr grid, const Matrix4d& T) const {
