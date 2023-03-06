@@ -168,3 +168,42 @@ class VDBVolume:
         This function is ideal to cleanup the TSDF grid:D(x) before exporting it.
         """
         return self._volume._prune(min_weight)
+
+class ImplicitRegistration:
+    def __init__(
+        self,
+        vdb_volume_global: VDBVolume,
+        max_iters: int,
+        convergence_threshold: float,
+        clipping_range: float
+    ):
+        self._registration_pipeline = vdbfusion_pybind._ImplicitRegistration(
+            vdb_volume_global=vdb_volume_global._volume,
+            max_iters=np.int32(max_iters),
+            convergence_threshold=np.float32(convergence_threshold),
+            clipping_range=np.float32(clipping_range)
+        )
+
+        self.vdb_volume_global = self._registration_pipeline._vdb_volume_global
+        self.max_iters = max_iters
+        self.convergence_threshold = convergence_threshold
+        self.clipping_range = clipping_range
+
+    def __repr__(self) -> str:
+        return (
+            f"Implicit Registration Pipeline with:\n"
+            f"global_vdb_volume = {self.vdb_volume_global.__repr__()}\n"
+            f"convergence_threshold    = {self.convergence_threshold}\n"
+            f"max_iters     = {self.max_iters}\n"
+            f"clipping_range = {self.clipping_range}\n"
+        )
+    
+    def alignScan(self, points: np.ndarray, T_init: np.ndarray) -> Tuple:
+        assert isinstance(points, np.ndarray), "points must by np.ndarray(n, 3)"
+        assert points.dtype == np.float64, "points dtype must be np.float64"
+        assert isinstance(T_init, np.ndarray), "initial guess tf must by np.ndarray"
+        assert T_init.dtype == np.float64, "initial guess tf dtype must be np.float64"
+        assert T_init.shape == (4, 4) , "initial guess tf must be a (4,4) matrix"
+        _points = vdbfusion_pybind._VectorEigen3d(points)
+        aligned_points, T, n_iters = self._registration_pipeline._align_scan(_points, T_init)
+        return np.asarray(aligned_points), T, n_iters

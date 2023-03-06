@@ -41,6 +41,7 @@
 #endif
 
 #include "stl_vector_eigen.h"
+#include "vdbfusion/ImplicitRegistration.h"
 #include "vdbfusion/VDBVolume.h"
 
 PYBIND11_MAKE_OPAQUE(std::vector<Eigen::Vector3d>);
@@ -164,7 +165,13 @@ PYBIND11_MODULE(vdbfusion_pybind, m) {
         "constructor defined within this module (starting with a ``_`` "
         "should not be used. Please refer to the python Processor class to "
         "check how to use the API");
-    implicit_registration.def(py::init<VDBVolume, float>(), "vdb_volume_global"_a,
-                              "clipping_range"_a)
+    implicit_registration
+        .def(py::init<VDBVolume&, const int, const float, const float>(), "vdb_volume_global"_a,
+             "max_iters"_a, "convergence_threshold"_a, "clipping_range"_a)
+        .def("_align_scan",
+             py::overload_cast<const std::vector<Eigen::Vector3d>&, const Eigen::Matrix4d&>(
+                 &ImplicitRegistration::AlignScan),
+             "pcl_local"_a, "T_init"_a)
+        .def_readwrite("_vdb_volume_global", &ImplicitRegistration::vdb_volume_global_);
 }
 }  // namespace vdbfusion

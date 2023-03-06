@@ -66,15 +66,14 @@ struct KITTIConfig {
 };
 
 struct CowAndLadyConfig {
-    std::string topic_name_;
+    bool preprocess_;
     float min_range_;
     float max_range_;
 
     static inline CowAndLadyConfig LoadFromYAML(const std::string& path) {
         std::ifstream config_file(path, std::ios_base::in);
         auto config = YAML::Load(config_file);
-        const std::string topic_name = config["topic_name"].as<std::string>();
-        return CowAndLadyConfig{topic_name,                       //
+        return CowAndLadyConfig{config["preprocess"].as<bool>(),  //
                                 config["min_range"].as<float>(),  //
                                 config["max_range"].as<float>()};
     }

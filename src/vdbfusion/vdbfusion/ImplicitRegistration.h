@@ -8,33 +8,36 @@
 
 namespace vdbfusion {
 struct registrationConfigParams {
-    bool use_clipped_tsdf;
     int max_iters_;
-    double convergence_threshold_;
-    double clipping_range_;
+    float convergence_threshold_;
+    float clipping_range_;
 };
 
 class ImplicitRegistration {
 public:
     ImplicitRegistration(VDBVolume& vdb_volume_global, const registrationConfigParams& config);
+    ImplicitRegistration(VDBVolume& vdb_volume_global,
+                         const int max_iters_,
+                         const float convergence_threshold_,
+                         const float clipping_range_);
+
     ~ImplicitRegistration() = default;
 
 public:
-    Sophus::SE3d ConstantVelocityModel() const;
-
     /// @brief Compute the Gradients of the Signed Distance Field at each voxel location
+    openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr ComputeGradient(
+        const openvdb::FloatGrid::Ptr grid, const Eigen::Matrix4d& T) const;
+
     openvdb::tools::ScalarToVectorConverter<openvdb::FloatGrid>::Type::Ptr ComputeGradient(
         const openvdb::FloatGrid::Ptr grid) const;
 
-    openvdb::FloatGrid::Ptr ClipVolume(const Sophus::SE3d& T) const;
-
-    std::tuple<std::vector<Eigen::Vector3d>, Sophus::SE3d, int> AlignScan(
-        const std::vector<Eigen::Vector3d>& pcl_local, const Sophus::SE3d& T_init);
+    std::tuple<std::vector<Eigen::Vector3d>, Eigen::Matrix4d, int> AlignScan(
+        const std::vector<Eigen::Vector3d>& pcl_local, const Eigen::Matrix4d& T_init);
 
 public:
     VDBVolume vdb_volume_global_;
     registrationConfigParams config_;
-    Sophus::SE3d T_minus_1{};
-    Sophus::SE3d T_minus_2{};
+    Eigen::Matrix4d T_minus_1;
+    Eigen::Matrix4d T_minus_2;
 };
 }  // namespace vdbfusion

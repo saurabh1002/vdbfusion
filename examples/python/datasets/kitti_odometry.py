@@ -51,7 +51,6 @@ class KITTIOdometryDataset:
         self.calibration = self.read_calib_file(os.path.join(self.kitti_sequence_dir, "calib.txt"))
         self.poses = self.load_poses(os.path.join(kitti_root_dir, f"poses/{self.sequence}.txt"))
         self.scan_files = sorted(glob.glob(self.velodyne_dir + "*.bin"))
-
         # Cache
         self.use_cache = True
         self.cache = get_cache(directory="cache/kitti/")
@@ -67,11 +66,11 @@ class KITTIOdometryDataset:
 
     @memoize()
     def read_point_cloud(self, idx: int, scan_file: str, config: dict):
-        points = np.fromfile(scan_file, dtype=np.float32).reshape((-1, 4))
+        points = np.fromfile(scan_file, dtype=np.float64).reshape((-1, 4))
         points = self._correct_scan(points) if config.correct_scan else points[:, :3]
         points = points[np.linalg.norm(points, axis=1) <= config.max_range]
         points = points[np.linalg.norm(points, axis=1) >= config.min_range]
-        points = transform_points(points, self.poses[idx]) if config.apply_pose else None
+        points = transform_points(points, self.poses[idx]) if config.apply_pose else points
         return points
 
     @staticmethod

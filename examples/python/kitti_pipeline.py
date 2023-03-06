@@ -5,7 +5,7 @@
 # Copyright (c) 2021 Ignacio Vizzo, all rights reserved
 import argh
 from datasets import KITTIOdometryDataset as Dataset
-from vdbfusion_pipeline import VDBFusionPipeline as Pipeline
+from vdbfusion_pipeline import VDBFusionOdometryPipeline as Pipeline
 
 
 def main(

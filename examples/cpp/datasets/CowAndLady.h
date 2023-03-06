@@ -30,24 +30,20 @@
 
 namespace datasets {
 
-class KITTIDataset {
+class CowAndLadyDataset {
 public:
-    using Point = Eigen::Vector3d;
     using PointCloud = std::vector<Eigen::Vector3d>;
 
-    explicit KITTIDataset(const std::string& kitti_root_dir,
-                          const std::string& sequence,
-                          int n_scans = -1);
+    explicit CowAndLadyDataset(const std::string& cow_root_dir, int n_scans = -1);
 
-    explicit KITTIDataset(const std::string& kitti_root_dir,
-                          const std::string& sequence,
-                          int n_scans = -1,
-                          bool preprocess = true,
-                          float min_range = 0.0F,
-                          float max_range = std::numeric_limits<float>::max());
+    explicit CowAndLadyDataset(const std::string& cow_root_dir,
+                               int n_scans = -1,
+                               bool preprocess = true,
+                               float min_range = 0.0F,
+                               float max_range = std::numeric_limits<float>::max());
 
     /// Returns a point cloud and the origin of the sensor in world coordinate frames
-    [[nodiscard]] std::tuple<float, PointCloud, Eigen::Matrix4d> operator[](int idx) const;
+    [[nodiscard]] PointCloud operator[](int idx) const;
     [[nodiscard]] std::size_t size() const { return scan_files_.size(); }
 
 public:
@@ -57,8 +53,6 @@ public:
     float max_range_ = std::numeric_limits<float>::max();
 
 private:
-    std::vector<Eigen::Matrix4d> poses_;
-    std::vector<double> timestamps_;
     std::vector<std::string> scan_files_;
 };
 

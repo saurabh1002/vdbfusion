@@ -24,7 +24,6 @@
 #include <fmt/format.h>
 #include <igl/write_triangle_mesh.h>
 #include <openvdb/openvdb.h>
-#include <rosbag_reader/rosbag.h>
 #include <vdbfusion/ImplicitRegistration.h>
 #include <vdbfusion/VDBVolume.h>
 
@@ -36,6 +35,7 @@
 #include <fstream>
 #include <string>
 
+#include "datasets/CowAndLady.h"
 #include "utils/Config.h"
 #include "utils/Iterable.h"
 #include "utils/Timers.h"
@@ -47,21 +47,10 @@ namespace fs = std::filesystem;
 
 namespace {
 
-std::vector<Eigen::Vector3d> vector2Eigen(const std::vector<std::vector<double>>& vec_mat) {
-    std::vector<Eigen::Vector3d> scan(vec_mat.size());
-    std::transform(
-        std::execution::par_unseq, vec_mat.cbegin(), vec_mat.cend(), scan.begin(),
-        [](const std::vector<double>& pt) { return Eigen::Vector3d(pt[0], pt[1], pt[2]); });
-    // for (int i = 0; i < vec_mat.size(); i++) {
-    //     scan.emplace_back(Eigen::Vector3d(vec_mat[i][0], vec_mat[i][1], vec_mat[i][2]));
-    // }
-    return std::move(scan);
-}
-
 argparse::ArgumentParser ArgParse(int argc, char* argv[]) {
     argparse::ArgumentParser argparser("CowAndLadyPipeline");
-    argparser.add_argument("path_to_bag_file")
-        .help("The full path to the Cow and Lady dataset rosbag");
+    argparser.add_argument("cow_and_lady_dir")
+        .help("The full path to the Cow and Lady dataset directory");
     argparser.add_argument("mesh_output_dir").help("Directory to store the resultant mesh");
     argparser.add_argument("--config")
         .help("Dataset specific config file")
@@ -95,7 +84,7 @@ public:
 
 public:
     void operator()(vdbfusion::ImplicitRegistration& pipeline,
-                    const Sophus::SE3d& T,
+                    const Eigen::Matrix4d& T,
                     float min_weight) {
         auto map_name = fmt::format("{out_dir}/cow_and_lady/{n_scans}_scans",
                                     "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
@@ -106,16 +95,16 @@ public:
                 std::string filename = fmt::format("{map_name}.vdb", "map_name"_a = map_name);
                 openvdb::io::File(filename).write({pipeline.vdb_volume_global_.tsdf_});
             }
-            {
-                auto grad_name =
-                    fmt::format("{out_dir}/cow_and_lady/{n_scans}_scans_grad",
-                                "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
-                                "n_scans"_a = n_iters + 1);
-                timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
-                auto grad_grid = pipeline.ComputeGradient(pipeline.ClipVolume(T));
-                std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
-                openvdb::io::File(filename).write({grad_grid});
-            }
+            // {
+            //     auto grad_name =
+            //         fmt::format("{out_dir}/cow_and_lady/{n_scans}_scans_grad",
+            //                     "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
+            //                     "n_scans"_a = n_iters + 1);
+            //     timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
+            //     auto grad_grid = pipeline.ComputeGradient(pipeline.vdb_volume_global_.tsdf_, T);
+            //     std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
+            //     openvdb::io::File(filename).write({grad_grid});
+            // }
             {
                 timers::ScopeTimer timer("Writing Mesh to disk");
                 auto [vertices, triangles] =
@@ -144,15 +133,6 @@ private:
     argparse::ArgumentParser argparser_;
 };
 
-void PreProcessCloud(std::vector<Eigen::Vector3d>& points, float min_range, float max_range) {
-    points.erase(
-        std::remove_if(points.begin(), points.end(), [&](auto p) { return p.norm() > max_range; }),
-        points.end());
-    points.erase(
-        std::remove_if(points.begin(), points.end(), [&](auto p) { return p.norm() < min_range; }),
-        points.end());
-}
-
 int main(int argc, char* argv[]) {
     auto argparser = ArgParse(argc, argv);
 
@@ -167,16 +147,13 @@ int main(int argc, char* argv[]) {
     openvdb::initialize();
 
     auto n_scans = argparser.get<int>("--n_scans");
-    auto path_to_cow_and_lady_bag = fs::path(argparser.get<std::string>("path_to_bag_file"));
+    auto cow_root_dir = fs::path(argparser.get<std::string>("cow_and_lady_dir"));
 
     // Initialize dataset
-    auto rosbag = Rosbag(path_to_cow_and_lady_bag);
-    rosbag.readData();
+    const auto dataset =
+        datasets::CowAndLadyDataset(cow_root_dir, n_scans, cow_and_lady_cfg.preprocess_,
+                                    cow_and_lady_cfg.min_range_, cow_and_lady_cfg.max_range_);
 
-    int num_of_scans_on_topic = rosbag.getNumMsgsonTopic(cow_and_lady_cfg.topic_name_);
-    if (n_scans == -1 || n_scans > num_of_scans_on_topic) {
-        n_scans = num_of_scans_on_topic;
-    }
     fmt::print("Integrating {} scans\n", n_scans);
 
     // Init VDB Volume
@@ -185,47 +162,35 @@ int main(int argc, char* argv[]) {
 
     // Init registration class
     vdbfusion::registrationConfigParams config;
-    config.use_clipped_tsdf = true;
     config.max_iters_ = 500;
     config.convergence_threshold_ = 5e-5;
     config.clipping_range_ = cow_and_lady_cfg.max_range_;
+
     vdbfusion::ImplicitRegistration registration_pipeline(tsdf_volume, config);
 
     timers::FPSTimer<10> timer;
     DataSaver<50> datasaver(argparser);
     bool init_scan = true;
-    Sophus::SE3d init_tf{};
+    Eigen::Matrix4d init_tf{};
+    init_tf.setIdentity();
 
     std::vector<Eigen::Matrix<double, 3, 4>> poses;
     poses.reserve(n_scans);
 
-    float sigma = 50.0;
-    float epsilon = -0.2;
-    auto weghting_func = [&](float sdf) {
-        // if (sdf > epsilon)
-        //     return 1.0;
-        // else if (sdf < -vdbfusion_cfg.sdf_trunc_)
-        //     return 0.0;
-        // else
-        //     return std::exp(-sigma * std::pow(sdf - epsilon, 2));
-        return 1.0;
-    };
-
-    for (int idx = 0; idx < n_scans; idx++) {
-        if (idx < 100) continue;
+    int start_idx = 100;
+    for (int idx = start_idx; idx < n_scans; idx++) {
         timer.tic();
-        auto pcl = rosbag.extractPointCloud2(cow_and_lady_cfg.topic_name_, idx);
-        auto scan = vector2Eigen(pcl.data);
-        PreProcessCloud(scan, cow_and_lady_cfg.min_range_, cow_and_lady_cfg.max_range_);
         if (!init_scan) {
-            auto [aligned_scan, T, n_iters] = registration_pipeline.AlignScan(scan, init_tf);
-            std::cout << "idx: " << idx << "; niters = " << n_iters << "\n";
-            tsdf_volume.Integrate(aligned_scan, T.matrix(), weghting_func);
-            poses.emplace_back(T.matrix3x4());
+            auto [aligned_scan, T, n_iters] =
+                registration_pipeline.AlignScan(dataset[idx], init_tf);
+            tsdf_volume.Integrate(aligned_scan, T, [](float) { return 1.0; });
+            poses.emplace_back(T.block<3, 4>(0, 0));
             init_tf = T;
+
+            std::cout << "scan idx: " << idx << "\t iters = " << n_iters << "\n";
         } else {
-            tsdf_volume.Integrate(scan, init_tf.matrix(), weghting_func);
-            poses.emplace_back(init_tf.matrix3x4());
+            tsdf_volume.Integrate(dataset[idx], init_tf, [](float) { return 1.0; });
+            poses.emplace_back(init_tf.block<3, 4>(0, 0));
             init_scan = false;
         }
         datasaver(registration_pipeline, init_tf, vdbfusion_cfg.min_weight_);
@@ -236,27 +201,6 @@ int main(int argc, char* argv[]) {
         "{out_dir}/cow_and_lady/", "out_dir"_a = argparser.get<std::string>("mesh_output_dir")));
 
     // Store the grid results to disks
-    std::string map_name = fmt::format("{out_dir}/cow_and_lady/{n_scans}_scans",
-                                       "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
-                                       "n_scans"_a = n_scans);
-    // {
-    //     timers::ScopeTimer timer("Writing VDB grid to disk");
-    //     auto tsdf_grid = tsdf_volume.tsdf_;
-    //     std::string filename = fmt::format("{map_name}.vdb", "map_name"_a = map_name);
-    //     openvdb::io::File(filename).write({tsdf_grid});
-    // }
-
-    // std::string grad_name = fmt::format("{out_dir}/cow_and_lady/{n_scans}_scans_grad",
-    //                                     "out_dir"_a =
-    //                                     argparser.get<std::string>("mesh_output_dir"),//
-    //                                     "n_scans"_a = n_scans);
-    // {
-    //     timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
-    //     auto grad_grid = tsdf_volume.ComputeGradient(tsdf_volume.tsdf_);
-    //     std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
-    //     openvdb::io::File(filename).write({grad_grid});
-    // }
-
     std::string pose_name = fmt::format(
         "{out_dir}/cow_and_lady/", "out_dir"_a = argparser.get<std::string>("mesh_output_dir"));
     {
@@ -272,6 +216,10 @@ int main(int argc, char* argv[]) {
                       });
         pose_file.close();
     }
+
+    std::string map_name = fmt::format("{out_dir}/cow_and_lady/{n_scans}_scans",
+                                       "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
+                                       "n_scans"_a = n_scans);
 
     // Run marching cubes and save a .ply file
     {

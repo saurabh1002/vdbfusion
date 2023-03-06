@@ -1,6 +1,6 @@
 # MIT License
 #
-# # Copyright (c) 2022 Saurabh Gupta, Ignacio Vizzo, Cyrill Stachniss, University of Bonn
+# # Copyright (c) 2023 Saurabh Gupta, Ignacio Vizzo, Cyrill Stachniss, University of Bonn
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -19,13 +19,12 @@
 # LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
-
 include(ExternalProject)
 
 ExternalProject_Add(
   external_sophus
   PREFIX sophus
-  URL https://github.com/strasdat/Sophus/archive/refs/tags/v22.04.1.tar.gz
+  URL https://github.com/strasdat/Sophus/archive/refs/tags/1.22.10.tar.gz
   UPDATE_COMMAND ""
   CONFIGURE_COMMAND ""
   BUILD_COMMAND ""
@@ -41,5 +40,5 @@ add_library(SophusHelper INTERFACE)
 add_dependencies(SophusHelper external_sophus)
 target_compile_definitions(SophusHelper INTERFACE SOPHUS_USE_BASIC_LOGGING=1)
 target_include_directories(SophusHelper SYSTEM INTERFACE $<BUILD_INTERFACE:${SOURCE_DIR}>)
-set_property(TARGET SophusHelper PROPERTY EXPORT_NAME sophus::sophus)
-add_library(sophus::sophus ALIAS SophusHelper)
+set_property(TARGET SophusHelper PROPERTY EXPORT_NAME Sophus::Sophus)
+add_library(Sophus::Sophus ALIAS SophusHelper)

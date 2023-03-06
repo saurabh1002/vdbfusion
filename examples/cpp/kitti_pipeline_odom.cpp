@@ -40,6 +40,8 @@
 // Namespace aliases
 using namespace fmt::literals;
 using namespace utils;
+using PointCloud = std::vector<Eigen::Vector3d>;
+
 namespace fs = std::filesystem;
 
 namespace {
@@ -51,7 +53,7 @@ argparse::ArgumentParser ArgParse(int argc, char* argv[]) {
     argparser.add_argument("--sequence").help("KITTI Sequence");
     argparser.add_argument("--config")
         .help("Dataset specific config file")
-        .default_value<std::string>("config/kitti.yaml")
+        .default_value<std::string>("../examples/cpp/config/kitti.yaml")
         .action([](const std::string& value) { return value; });
     argparser.add_argument("--n_scans")
         .help("How many scans to map")
@@ -87,26 +89,46 @@ public:
     };
 
 public:
-    void operator()(vdbfusion::ImplicitRegistration& pipeline, const Sophus::SE3d& T) {
+    void operator()(vdbfusion::ImplicitRegistration& pipeline,
+                    const Eigen::Matrix4d& T,
+                    float min_weight) {
+        auto map_name = fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans",
+                                    "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
+                                    "seq"_a = sequence_, "n_scans"_a = n_iters + 1);
         if ((n_iters + 1) % N == 0) {
             {
-                auto map_name =
-                    fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans",
-                                "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
-                                "seq"_a = sequence_, "n_scans"_a = n_iters + 1);
                 timers::ScopeTimer timer("Writing VDB grid to disk");
                 std::string filename = fmt::format("{map_name}.vdb", "map_name"_a = map_name);
                 openvdb::io::File(filename).write({pipeline.vdb_volume_global_.tsdf_});
             }
+            // {
+            //     auto grad_name =
+            //         fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans_grad",
+            //                     "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
+            //                     "seq"_a = sequence_, "n_scans"_a = n_iters + 1);
+            //     timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
+            //     auto grad_grid = pipeline.ComputeGradient(pipeline.vdb_volume_global_.tsdf_, T);
+            //     std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
+            //     openvdb::io::File(filename).write({grad_grid});
+            // }
             {
-                auto grad_name =
-                    fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans_grad",
-                                "out_dir"_a = argparser_.get<std::string>("mesh_output_dir"),
-                                "seq"_a = sequence_, "n_scans"_a = n_iters + 1);
-                timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
-                auto grad_grid = pipeline.ComputeGradient(pipeline.ClipVolume(T));
-                std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
-                openvdb::io::File(filename).write({grad_grid});
+                timers::ScopeTimer timer("Writing Mesh to disk");
+                auto [vertices, triangles] =
+                    pipeline.vdb_volume_global_.ExtractTriangleMesh(true, min_weight);
+
+                // TODO: Fix this!
+                Eigen::MatrixXd V(vertices.size(), 3);
+                for (size_t i = 0; i < vertices.size(); i++) {
+                    V.row(i) = Eigen::VectorXd::Map(&vertices[i][0], vertices[i].size());
+                }
+
+                // TODO: Also this
+                Eigen::MatrixXi F(triangles.size(), 3);
+                for (size_t i = 0; i < triangles.size(); i++) {
+                    F.row(i) = Eigen::VectorXi::Map(&triangles[i][0], triangles[i].size());
+                }
+                std::string filename = fmt::format("{map_name}.ply", "map_name"_a = map_name);
+                igl::write_triangle_mesh(filename, V, F, igl::FileEncoding::Binary);
             }
         }
         n_iters++;
@@ -117,6 +139,29 @@ private:
     argparse::ArgumentParser argparser_;
     std::string sequence_;
 };
+
+PointCloud ApplyTransform(const PointCloud& pcl, const Sophus::SE3d& T) {
+    auto R = T.rotationMatrix();
+    auto tr = T.translation();
+
+    PointCloud pcl_t(pcl.size());
+
+    std::transform(pcl.cbegin(), pcl.cend(), pcl_t.begin(),
+                   [&](const Eigen::Vector3d& pt) { return (R * pt) + tr; });
+
+    return pcl_t;
+}
+
+std::vector<Eigen::Vector3d> TransformPoints(const std::vector<Eigen::Vector3d>& points,
+                                             const Eigen::Matrix4d& transformation) {
+    std::vector<Eigen::Vector3d> points_new;
+    for (auto& point : points) {
+        Eigen::Vector4d new_point =
+            transformation * Eigen::Vector4d(point(0), point(1), point(2), 1.0);
+        points_new.emplace_back(new_point.head<3>() / new_point(3));
+    }
+    return points_new;
+}
 
 int main(int argc, char* argv[]) {
     auto argparser = ArgParse(argc, argv);
@@ -146,40 +191,47 @@ int main(int argc, char* argv[]) {
 
     // Init registration class
     vdbfusion::registrationConfigParams config;
-    config.use_clipped_tsdf = true;
     config.max_iters_ = 2000;
     config.convergence_threshold_ = 5e-3;
     config.clipping_range_ = kitti_cfg.max_range_;
     vdbfusion::ImplicitRegistration registration_pipeline(tsdf_volume, config);
 
-    timers::FPSTimer<10> timer;
-    DataSaver<25> datasaver(argparser, sequence);
+    timers::FPSTimer<50> timer;
+    DataSaver<10> datasaver(argparser, sequence);
     bool init_scan = true;
-    Sophus::SE3d init_tf{};
+    Eigen::Matrix4d init_tf{};
+    init_tf.setIdentity();
 
     std::vector<Eigen::Matrix<double, 3, 4>> poses;
     poses.reserve(dataset.size());
 
+    int count = 50;
     int scan_nr = 0;
-    for (const auto& [timestamp, scan, origin] : iterable(dataset)) {
+    for (const auto& [_, scan, pose] : iterable(dataset)) {
         timer.tic();
-        if (scan_nr < 0) {
-            scan_nr++;
-            continue;
-        }
-
+        // init_tf = Sophus::SE3d(Sophus::makeRotationMatrix(pose.block<3, 3>(0, 0)),
+        //                        pose.block<3, 1>(0, 3)).matrix();
         if (!init_scan) {
             auto [aligned_scan, T, n_iters] = registration_pipeline.AlignScan(scan, init_tf);
-            tsdf_volume.Integrate(aligned_scan, T.matrix(), [](float) { return 1.0; });
-            poses.emplace_back(T.matrix3x4());
+            tsdf_volume.Integrate(aligned_scan, T, [](float) { return 1.0; });
+            poses.emplace_back(T.block<3, 4>(0, 0));
             init_tf = T;
+
+            std::cout << "difference pose: " << (pose - T).norm() << "\n";
+            std::cout << "scan idx: " << scan_nr << "\t iters = " << n_iters << "\n";
         } else {
-            tsdf_volume.Integrate(scan, origin, [](float /*unused*/) { return 1.0; });
-            poses.emplace_back(init_tf.matrix3x4());
-            init_scan = false;
+            tsdf_volume.Integrate(TransformPoints(scan, pose), pose,
+                                  [](float /*unused*/) { return 1.0; });
+            poses.emplace_back(pose.block<3, 4>(0, 0));
+
+            count--;
+            if (count == 0) init_scan = false;
+            init_tf = Sophus::SE3d(Sophus::makeRotationMatrix(pose.block<3, 3>(0, 0)),
+                                   pose.block<3, 1>(0, 3))
+                          .matrix();
         }
         scan_nr++;
-        // datasaver(tsdf_volume, init_tf);
+        datasaver(registration_pipeline, init_tf, vdbfusion_cfg.min_weight_);
         timer.toc();
     }
 
@@ -191,23 +243,12 @@ int main(int argc, char* argv[]) {
     std::string map_name = fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans",
                                        "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),
                                        "seq"_a = sequence, "n_scans"_a = n_scans);
-    // {
-    //     timers::ScopeTimer timer("Writing VDB grid to disk");
-    //     auto tsdf_grid = tsdf_volume.tsdf_;
-    //     std::string filename = fmt::format("{map_name}.vdb", "map_name"_a = map_name);
-    //     openvdb::io::File(filename).write({tsdf_grid});
-    // }
-
-    // std::string grad_name = fmt::format("{out_dir}/kitti_odom_{seq}/{n_scans}_scans_grad",
-    //                                     "out_dir"_a =
-    //                                     argparser.get<std::string>("mesh_output_dir"), "seq"_a =
-    //                                     sequence, "n_scans"_a = n_scans);
-    // {
-    //     timers::ScopeTimer timer("Writing VDB grid Gradient to disk");
-    //     auto grad_grid = tsdf_volume.ComputeGradient(tsdf_volume.tsdf_);
-    //     std::string filename = fmt::format("{grad_name}.vdb", "grad_name"_a = grad_name);
-    //     openvdb::io::File(filename).write({grad_grid});
-    // }
+    {
+        timers::ScopeTimer timer("Writing VDB grid to disk");
+        auto tsdf_grid = tsdf_volume.tsdf_;
+        std::string filename = fmt::format("{map_name}.vdb", "map_name"_a = map_name);
+        openvdb::io::File(filename).write({tsdf_grid});
+    }
 
     std::string pose_name = fmt::format("{out_dir}/kitti_odom_{seq}/{seq}",
                                         "out_dir"_a = argparser.get<std::string>("mesh_output_dir"),

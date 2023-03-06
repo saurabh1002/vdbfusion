@@ -43,5 +43,5 @@ set_target_properties(kitti_pipeline_odom PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${
 
 add_executable(cow_and_lady cow_and_lady.cpp)
 target_compile_features(cow_and_lady PUBLIC cxx_std_17)
-target_link_libraries(cow_and_lady PRIVATE VDBFusion::vdbfusion VDBFusion::registration argparse::argparse fmt::fmt igl::core yaml-cpp rosbag_reader::rosbag_reader)
+target_link_libraries(cow_and_lady PRIVATE VDBFusion::vdbfusion VDBFusion::registration argparse::argparse fmt::fmt igl::core datasets yaml-cpp)
 set_target_properties(cow_and_lady PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})

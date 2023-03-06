@@ -22,16 +22,16 @@
 
 # VDBFUSION
 voxel_size: 0.1
-sdf_trunc: 0.3
+sdf_trunc: 3.0
 space_carving: False
-out_dir: "results/"
+out_dir: "/home/ssg1002/thesis_results/"
 
 # Reconstruction
 fill_holes: False
 min_weight: 5.0
 
 # Kitti
-apply_pose: True
-min_range: 2.5
-max_range: 120.0
+apply_pose: False
+min_range: 2.0
+max_range: 70.0
 correct_scan: True

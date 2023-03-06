@@ -22,7 +22,7 @@
 
 pybind11_add_module(vdbfusion_pybind vdbfusion_pybind.cpp)
 target_compile_options(vdbfusion_pybind PRIVATE -Werror -Wall -Wextra)
-target_link_libraries(vdbfusion_pybind PRIVATE VDBFusion::vdbfusion)
+target_link_libraries(vdbfusion_pybind PRIVATE VDBFusion::vdbfusion VDBFusion::registration)
 
 # PYOPENVDB_SUPPORT is defined only by the existence of the pyopenvdb library.
 find_package(Python COMPONENTS Interpreter)
